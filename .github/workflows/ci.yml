@@ -25,3 +25,13 @@ jobs:
         run: |
           . ./Start-Project.ps1
           start -Doctor
+
+      - name: Remote bootstrap smoke (published one-liner path)
+        shell: pwsh
+        run: |
+          # exercise the real download+install flow (fetches current main)
+          ./bootstrap.ps1
+          $installed = Join-Path $env:USERPROFILE '.project-starter'
+          if (-not (Test-Path (Join-Path $installed 'Start-Project.ps1'))) { throw 'bootstrap did not install the engine' }
+          . (Join-Path $installed 'Start-Project.ps1')
+          if (-not (${function:start})) { throw 'installed engine did not define start' }

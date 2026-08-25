@@ -1,5 +1,7 @@
 # project-starter
 
+[![ci](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml)
+
 One word from any shell to a running AI coding agent inside a fresh, git-initialized project.
 
 ```powershell
@@ -10,18 +12,25 @@ creates the project folder, runs `git init`, opens a **new Windows Terminal tab*
 
 ## Install
 
-Canonical (clone once, install per shell):
+**PowerShell** — one command:
 
 ```powershell
-git clone https://github.com/alexandrosm/project-starter.git "$env:USERPROFILE\.project-starter"
-& "$env:USERPROFILE\.project-starter\install.ps1"          # PowerShell 5.1 + 7+
-bash "$env:USERPROFILE\.project-starter\install.sh"        # bash / zsh (Git Bash, WSL)
-powershell -File "$env:USERPROFILE\.project-starter\install-cmd.ps1"   # cmd.exe
+irm https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap.ps1 | iex
 ```
 
-A PowerShell Gallery module manifest (`ProjectStarter.psd1`) ships alongside for `Publish-Module`/`Install-Module` workflows.
+**bash / zsh (Git Bash, WSL)** — one command:
 
-Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove`.
+```bash
+curl -fsSL https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap.sh | bash
+```
+
+**cmd.exe** — one command:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap.ps1 | iex"
+```
+
+All three download the repo to `~\.project-starter` and wire up that shell's face (the PowerShell bootstrap also wires bash when it detects it). Re-running any of them updates an existing install. Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove` from the installed folder.
 
 ## Shells
 
@@ -109,13 +118,11 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 
 ## Development
 
-Two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
+Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (27 checks)
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
 
-CI (`.github/workflows/ci.yml`) runs both on `windows-latest` for every push:
-
-[![ci](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml)
+CI runs both suites plus a remote-bootstrap smoke test on `windows-latest` for every push.

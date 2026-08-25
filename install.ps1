@@ -1,5 +1,5 @@
-# Installs the `start` function into your PowerShell profile(s).
-# Run once:  powershell -ExecutionPolicy Bypass -File install.ps1
+# Installs/updates the `start` function into your PowerShell profile(s).
+# Replaces any previous project-starter lines (idempotent + path-migration safe).
 $src = Join-Path $PSScriptRoot 'Start-Project.ps1'
 if (-not (Test-Path -LiteralPath $src)) {
     throw "Start-Project.ps1 not found next to install.ps1 ($PSScriptRoot)"
@@ -12,18 +12,18 @@ $profiles = @(
 )
 
 $marker = '# project-starter'
+$line = "if (Test-Path -LiteralPath '$src') { . '$src' }  $marker"
+
 foreach ($p in $profiles) {
     $dir = Split-Path $p -Parent
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    $existing = if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p -Raw } else { '' }
-    if ($existing -and $existing.Contains($marker)) {
-        Write-Host "already installed: $p"
-    } else {
-        Add-Content -Path $p -Value "if (Test-Path -LiteralPath '$src') { . '$src' }  $marker"
-        Write-Host "installed:         $p"
-    }
+    $kept = @(Get-Content -LiteralPath $p -ErrorAction SilentlyContinue |
+        Where-Object { $_ -notmatch [regex]::Escape($marker) })
+    $kept += $line
+    Set-Content -LiteralPath $p -Value $kept
+    Write-Host "installed/updated: $p"
 }
 
 # Profiles will not load at all while the EFFECTIVE policy is Restricted.
@@ -54,15 +54,6 @@ if ($null -eq $effective) {
 
 Write-Host ''
 Write-Host 'ready. open a NEW PowerShell window, then:'
-Write-Host '  start                              # pick a project (shows saved intents)'
-Write-Host '  start my-project                   # new repo; reopening RESUMES the last agent'
-Write-Host '  start my-task fix bug              # words become initial prompt AND saved intent'
-Write-Host '  start risky-refactor ... -Yolo     # appends the agent auto-approval flag'
-Write-Host ''
-Write-Host 'projects open in a NEW terminal tab (-Here stays inline).'
-Write-Host 'per-project metadata lives in <project>\.ps-project.json.'
-Write-Host 'add/tweak agents via agents.json next to Start-Project.ps1.'
-Write-Host "projects root: `$env:OMP_PROJECTS_DIR, default C:\projects"
-Write-Host ''
-Write-Host 'an ALREADY-open window will not see this until you reload its profile:'
-Write-Host "  . '$src'"
+Write-Host '  start                    # pick an existing project'
+Write-Host '  start my-project         # new repo; reopening it RESUMES the last agent'
+Write-Host '  start my-task fix bug    # extra words become the initial prompt'
