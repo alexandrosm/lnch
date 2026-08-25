@@ -1,20 +1,22 @@
 # project-starter
 
-One word from PowerShell to a running AI coding agent inside a fresh, git-initialized project.
+One word from any shell to a running AI coding agent inside a fresh, git-initialized project.
 
 ```powershell
 start my-app build a snake game
 ```
 
-creates `C:\projects\my-app`, runs `git init`, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
+creates the project folder, runs `git init`, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
 
-## Install
+## Shells
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
+| Shell | Install | Notes |
+|---|---|---|
+| PowerShell 5.1 / 7+ | `powershell -ExecutionPolicy Bypass -File install.ps1` | Native function; `-Yolo` / `-Here`; stays in project dir after `-Here` sessions |
+| bash / zsh (Git Bash, WSL) | `bash install.sh` | Thin shim into the same engine; `--yolo` / `--here`; cwd not preserved after `--here` (child process) |
+| cmd.exe | `powershell -ExecutionPolicy Bypass -File install-cmd.ps1` | doskey macro via HKCU AutoRun; **interactive sessions only** — scripted `cmd /c start ...` is untouched |
 
-Idempotent. Dot-sources `Start-Project.ps1` from both the PowerShell 7+ and Windows PowerShell 5.1 profiles, lifts a Restricted execution policy if needed, and prints the reload hint for already-open windows.
+All three drive one engine (`Start-Project.ps1`), so resume detection, the agent registry, metadata, and pickers behave identically everywhere. Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove`.
 
 ## Usage
 
@@ -23,10 +25,10 @@ Idempotent. Dot-sources `Start-Project.ps1` from both the PowerShell 7+ and Wind
 | `start` | Pick an existing project (fzf if installed, else numbered list); shows saved intent + last-active time |
 | `start <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
 | `start <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
-| `start <name> ... -Yolo` | Appends the agent's auto-approval flag (opt-in per invocation) |
-| `start <name> ... -Here` | Launch in the current window instead of a new tab |
+| `start <name> ... -Yolo` / `--yolo` | Appends the agent's auto-approval flag (opt-in per invocation) |
+| `start <name> ... -Here` / `--here` | Launch in the current window instead of a new tab |
 
-`<Tab>` completes project names. Projects root: `$env:OMP_PROJECTS_DIR`, default `C:\projects`.
+PowerShell `<Tab>` completes project names. Projects root: `$env:OMP_PROJECTS_DIR`, default `C:\projects`.
 
 ## Resume: how the agent is chosen
 
@@ -79,20 +81,13 @@ Plain JSON, safe to edit or commit-ignore.
 
 ## Requirements
 
-Windows, PowerShell 5.1 or 7+, `git` on PATH. Optional: Windows Terminal (`wt`) for new-tab launches, `fzf` for the picker, any agent executables you register.
-
-## Uninstall
-
-```powershell
-powershell -ExecutionPolicy Bypass -File uninstall.ps1
-```
-
-Removes the profile lines. Already-open shells keep the function until restarted.
+Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for new-tab launches, `fzf` for the picker, Git Bash for the bash shim, any agent executables you register.
 
 ## Development
 
-Bundled verification matrix (stubbed agents; touches only a temp dir):
+Two bundled suites, both stubbed (touch only temp dirs):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1   # or pwsh
+powershell  -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (27 checks)
+pwsh        -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # bash + cmd shims (15 checks)
 ```
