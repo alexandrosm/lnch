@@ -14,6 +14,8 @@ $sysRoot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
 $gitCmd  = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git\cmd' } else { 'C:\Program Files\Git\cmd' }
 $env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerShell\v1.0;$env:PATH"
 
+$env:OMP_PROJECTS_DIR = $Projects
+
 # redirected user-config so the persisted-default tests never touch real %APPDATA%
 $env:OMP_CONFIG_DIR = Join-Path $TestRoot 'config'
 New-Item -ItemType Directory -Force -Path $env:OMP_CONFIG_DIR | Out-Null
