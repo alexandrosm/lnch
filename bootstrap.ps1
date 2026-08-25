@@ -1,8 +1,7 @@
 # project-starter remote bootstrap for PowerShell / cmd boxes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <this-url> | iex"
 # Downloads the repo to ~\.project-starter, then wires up the PowerShell face
-# (and the bash face when a bash.exe is available). Idempotent: an existing
-# git clone is pulled; an older copy is replaced.
+# (and the bash face when an MSYS2/Git-bash is available). Idempotent.
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 $ProgressPreference = 'SilentlyContinue'
@@ -30,12 +29,24 @@ Remove-Item $tmpZip, $tmpExt -Recurse -Force -ErrorAction SilentlyContinue
 
 & (Join-Path $dest 'install.ps1')
 
-if ((Get-Command bash.exe -ErrorAction SilentlyContinue) -and -not $NoBash) {
+# wire the bash/zsh face using an MSYS2 bash (the WindowsApps bash.exe is a WSL
+# launcher that cannot read Windows paths)
+$bashExe = 'C:\Program Files\Git\bin\bash.exe'
+if (-not (Test-Path $bashExe)) {
+    $cand = Get-Command bash.exe -ErrorAction SilentlyContinue
+    if ($cand -and $cand.Source -notmatch 'WindowsApps') { $bashExe = $cand.Source }
+}
+if ($bashExe -and (Test-Path $bashExe)) {
     Write-Host ''
     Write-Host 'bash detected - wiring the bash/zsh face too:'
-    # bash chokes on backslash paths; hand it a forward-slash drive form
-    $posixish = $dest -replace '\\', '/'
-    & bash "$posixish/install.sh"
+    # convert to MSYS-style POSIX path: C:\foo -> /c/foo
+    $drive = $dest.Substring(0, 1).ToLower()
+    $rest  = $dest.Substring(3).Replace('\', '/')
+    $posix = "/$drive/$rest"
+    & $bashExe "$posix/install.sh"
+} else {
+    Write-Host ''
+    Write-Host 'no MSYS2 bash found - skipping bash/zsh face (see README for manual install)'
 }
 
 Write-Host ''
