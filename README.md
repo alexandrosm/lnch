@@ -13,7 +13,7 @@ creates the project folder, runs `git init`, opens a **new Windows Terminal tab*
 Canonical (clone once, install per shell):
 
 ```powershell
-git clone <repo-url> "$env:USERPROFILE\.project-starter"
+git clone https://github.com/alexandrosm/project-starter.git "$env:USERPROFILE\.project-starter"
 & "$env:USERPROFILE\.project-starter\install.ps1"          # PowerShell 5.1 + 7+
 bash "$env:USERPROFILE\.project-starter\install.sh"        # bash / zsh (Git Bash, WSL)
 powershell -File "$env:USERPROFILE\.project-starter\install-cmd.ps1"   # cmd.exe
@@ -116,4 +116,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1         
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
 
-CI (`.github/workflows/ci.yml`) runs both on `windows-latest` for every push.
+CI (`.github/workflows/ci.yml`) runs both on `windows-latest` for every push:
+
+[![ci](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/alexandrosm/project-starter/actions/workflows/ci.yml)
