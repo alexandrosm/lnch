@@ -8,15 +8,30 @@ start my-app build a snake game
 
 creates the project folder, runs `git init`, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
 
+## Install
+
+Canonical (clone once, install per shell):
+
+```powershell
+git clone <repo-url> "$env:USERPROFILE\.project-starter"
+& "$env:USERPROFILE\.project-starter\install.ps1"          # PowerShell 5.1 + 7+
+bash "$env:USERPROFILE\.project-starter\install.sh"        # bash / zsh (Git Bash, WSL)
+powershell -File "$env:USERPROFILE\.project-starter\install-cmd.ps1"   # cmd.exe
+```
+
+A PowerShell Gallery module manifest (`ProjectStarter.psd1`) ships alongside for `Publish-Module`/`Install-Module` workflows.
+
+Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove`.
+
 ## Shells
 
-| Shell | Install | Notes |
+| Shell | Entry | Notes |
 |---|---|---|
-| PowerShell 5.1 / 7+ | `powershell -ExecutionPolicy Bypass -File install.ps1` | Native function; `-Yolo` / `-Here`; stays in project dir after `-Here` sessions |
-| bash / zsh (Git Bash, WSL) | `bash install.sh` | Thin shim into the same engine; `--yolo` / `--here`; cwd not preserved after `--here` (child process) |
-| cmd.exe | `powershell -ExecutionPolicy Bypass -File install-cmd.ps1` | doskey macro via HKCU AutoRun; **interactive sessions only** — scripted `cmd /c start ...` is untouched |
+| PowerShell 5.1 / 7+ | native function | `-Yolo` / `-Here`; stays in project dir after `-Here` sessions |
+| bash / zsh (Git Bash, WSL) | sourced shim | `--yolo` / `--here`; cwd not preserved after `--here` (child process) |
+| cmd.exe | doskey macro via HKCU AutoRun | **interactive sessions only** — scripted `cmd /c start ...` is untouched |
 
-All three drive one engine (`Start-Project.ps1`), so resume detection, the agent registry, metadata, and pickers behave identically everywhere. Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove`.
+All three drive one engine (`Start-Project.ps1`), so resume detection, the agent registry, metadata, and pickers behave identically everywhere.
 
 ## Usage
 
@@ -25,10 +40,17 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the agent
 | `start` | Pick an existing project (fzf if installed, else numbered list); shows saved intent + last-active time |
 | `start <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
 | `start <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
-| `start <name> ... -Yolo` / `--yolo` | Appends the agent's auto-approval flag (opt-in per invocation) |
-| `start <name> ... -Here` / `--here` | Launch in the current window instead of a new tab |
+| `start -Agent <name>` / `--agent` | Force the agent for a new project |
+| `start -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
+| `start ... -Yolo` / `--yolo` | Appends the agent's auto-approval flag (opt-in per invocation) |
+| `start ... -Here` / `--here` | Launch in the current window instead of a new tab |
+| `start -Doctor` / `--doctor` | Audit tools, agents, config, hooks |
 
-PowerShell `<Tab>` completes project names. Projects root: `$env:OMP_PROJECTS_DIR`, default `C:\projects`.
+New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
+
+### ⚠️ `-Yolo` safety
+
+`-Yolo` appends each agent's auto-approval flag (e.g. `--approval-mode yolo`, `--dangerously-skip-permissions`). The agent will then **execute commands without asking you**. It is opt-in per invocation by design — never the default — and its effect is limited to the session it flags.
 
 ## Resume: how the agent is chosen
 
@@ -41,9 +63,9 @@ Every launch writes `<project>\.ps-project.json`. On reopen:
 
 Known limits: Gemini CLI has no trustworthy resume flag, so it relaunches fresh; Codex cannot take a prompt alongside resume, so extra words are dropped with a warning.
 
-## Custom agents — `agents.json`
+## Agents
 
-Optional file next to `Start-Project.ps1`; entries merge over the built-ins (omp, claude, codex, gemini).
+Built-in registry: **omp, claude, codex, gemini, aider, opencode, qwen**. Flags marked best-effort carry conservative values (empty `yoloFlags` warns instead of guessing). An optional `agents.json` next to `Start-Project.ps1` merges over the built-ins:
 
 ```json
 {
@@ -62,7 +84,9 @@ Optional file next to `Start-Project.ps1`; entries merge over the built-ins (omp
 | `takesPromptOnContinue` | may extra words ride along on resume | `true` |
 | `yoloFlags` | argv appended by `-Yolo` | `[]` (warns) |
 
-Built-in flags: omp `--approval-mode yolo`, claude `--dangerously-skip-permissions`, codex `--full-auto`, gemini `--yolo`.
+Built-in yolo flags: omp `--approval-mode yolo`, claude `--dangerously-skip-permissions`, codex `--full-auto`, gemini/qwen `--yolo`, aider `--yes-always`.
+
+Run `start -Doctor` to see which agents resolve on your machine and which have complete profiles.
 
 ## Per-project metadata
 
@@ -77,7 +101,7 @@ Built-in flags: omp `--approval-mode yolo`, claude `--dangerously-skip-permissio
 }
 ```
 
-Plain JSON, safe to edit or commit-ignore.
+Plain JSON, safe to edit or commit-ignore. User config lives separately in `%APPDATA%\project-starter\config.json` (`{"defaultAgent": "..."}`).
 
 ## Requirements
 
@@ -85,9 +109,11 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 
 ## Development
 
-Two bundled suites, both stubbed (touch only temp dirs):
+Two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
 
 ```powershell
-powershell  -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (27 checks)
-pwsh        -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # bash + cmd shims (15 checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (27 checks)
+pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
+
+CI (`.github/workflows/ci.yml`) runs both on `windows-latest` for every push.

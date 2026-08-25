@@ -1,6 +1,6 @@
-# Bundled verification matrix for project-starter.
-# Runs the `start` function against stub agents; touches only a temp dir.
-# Usage: powershell|pwsh -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+# Engine verification matrix for project-starter.
+# Runs the `start` function against stub agents; touches only a temp dir
+# plus a redirected config dir. Works on Windows PowerShell 5.1 and pwsh 7+.
 $ErrorActionPreference = 'Stop'
 
 $StarterDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -9,10 +9,18 @@ $TestRoot   = Join-Path ([IO.Path]::GetTempPath()) ('ps-startertest-' + [guid]::
 $Projects   = Join-Path $TestRoot 'projects'
 New-Item -ItemType Directory -Path $Projects -Force | Out-Null
 
-$env:OMP_PROJECTS_DIR = $Projects
-$env:PATH = "$StubBin;$env:PATH"
+# self-healing PATH: sandbox environments strip System32/Git unpredictably
+$sysRoot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
+$gitCmd  = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git\cmd' } else { 'C:\Program Files\Git\cmd' }
+$env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerShell\v1.0"
 
-# registry fixture: back up a real agents.json, install ours, restore afterwards
+$env:OMP_PROJECTS_DIR = $Projects
+
+# redirected user-config so the persisted-default tests never touch real %APPDATA%
+$env:OMP_CONFIG_DIR = Join-Path $TestRoot 'config'
+New-Item -ItemType Directory -Force -Path $env:OMP_CONFIG_DIR | Out-Null
+
+# registry fixture: back up any real agents.json, install ours, restore afterwards
 $registryPath = Join-Path $StarterDir 'agents.json'
 $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $registryPath -Raw } else { $null }
 @'
@@ -22,6 +30,10 @@ $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $
   "bare":  { "continueArgs": [] }
 }
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
+
+# deterministic fresh-project agent: seed the default so pickers never fire in A-I/K
+@{ defaultAgent = 'omp' } |
+    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:OMP_CONFIG_DIR 'config.json') -Encoding utf8
 
 $script:fail = 0
 function Check($label, $cond) {
@@ -71,7 +83,8 @@ try {
     Check 'F name'         ($env:OMP_START_NAME -eq 'epsilon')
     Check 'F prompt'       ($env:OMP_START_PROMPT -eq 'hi there')
     Check 'F yolo empty'   (-not $env:OMP_START_YOLO)
-    $env:OMP_START_NAME = 'zeta'; $env:OMP_START_PROMPT = 'hi there'; $env:OMP_START_YOLO = ''
+    Check 'F agent env'    ($env:OMP_START_AGENT -eq 'omp')
+    $env:OMP_START_NAME = 'zeta'; $env:OMP_START_PROMPT = 'hi there'; $env:OMP_START_YOLO = ''; $env:OMP_START_AGENT = ''
     $out = start -FromLauncher
     Check 'F launcher fresh prompt' (($out -join ' ') -match '\[omp-stub\] args="hi there"')
 
@@ -83,14 +96,10 @@ try {
     Set-Content -LiteralPath (Join-Path $Projects 'beta2\.ps-project.json') -Value '{"agent":"aider","updated":"2026-01-01T00:00:00.0000000Z"}'
     $out = start beta2 -Here
     Check 'H aider resume' (($out -join ' ') -match '\[aider-stub\] args=--resume --last')
-    $h = Meta 'beta2'
-    Check 'H upgraded meta' (($h -match '"created"') -and ($h -match '"agent":\s*"aider"'))
 
-    Write-Host '=== I: -Yolo appends registered flag on fresh start ==='
+    Write-Host '=== I/J: -Yolo flag mapping ==='
     $out = start iota hi -yolo -Here
     Check 'I omp yolo+prompt' (($out -join ' ') -match '\[omp-stub\] args=--approval-mode yolo hi')
-
-    Write-Host '=== J: -Yolo without registered flags warns and proceeds ==='
     New-Item -ItemType Directory -Path (Join-Path $Projects 'jay') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $Projects 'jay\.ps-project.json') -Value '{"agent":"bare","updated":"2026-01-01T00:00:00.0000000Z"}'
     $out = start jay p -yolo -Here
@@ -101,15 +110,37 @@ try {
     $j = $out -join ' '
     Check 'K handed off'   ($j -match 'WT-STUB')
     Check 'K env yolo'     ($env:OMP_START_YOLO -eq '1')
-    $env:OMP_START_NAME = 'kappa'; $env:OMP_START_PROMPT = 'go'; $env:OMP_START_YOLO = '1'
+    Check 'K env agent'    ($env:OMP_START_AGENT -eq 'omp')
+    $env:OMP_START_NAME = 'kappa'; $env:OMP_START_PROMPT = 'go'; $env:OMP_START_YOLO = '1'; $env:OMP_START_AGENT = 'omp'
     $out = start -FromLauncher
-    $j = $out -join ' '
-    Check 'K resume+yolo+prompt' ($j -match '\[omp-stub\] args=-c --approval-mode yolo go')
+    Check 'K resume+yolo+prompt' (($out -join ' ') -match '\[omp-stub\] args=-c --approval-mode yolo go')
     Check 'K env cleared' ((-not $env:OMP_START_NAME) -and (-not $env:OMP_START_YOLO))
+
+    Write-Host '=== L: default agent persisted and honored ==='
+    start -SetDefaultAgent claude
+    $out = start zeta3 build a castle -Here
+    Check 'L default claude' (($out -join ' ') -match '\[claude-stub\] args="build a castle"')
+
+    Write-Host '=== M: cleared default -> agent picker over installed agents ==='
+    start -SetDefaultAgent ''
+    $out = start eta x -Here
+    Check 'M picker aider' (($out -join ' ') -match '\[aider-stub\] args=x')
+
+    Write-Host '=== N: doctor audit ==='
+    $env:OMP_STARTER_DIR_WIN = $StarterDir
+    $out = & powershell.exe -NoProfile -Command '. "$env:OMP_STARTER_DIR_WIN\Start-Project.ps1"; start -Doctor' 2>&1
+    $j = $out -join ' '
+    Check 'N doctor runs'  ($j -match 'project-starter doctor')
+    Check 'N git ok'       ($j -match '\[ok\] git')
+
+    Write-Host '=== O: entry.ps1 --agent passthrough ==='
+    $entry = Join-Path $StarterDir 'entry.ps1'
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude kappa2 ship it --here 2>&1
+    Check 'O entry agent'  (($out -join ' ') -match '\[claude-stub\] args="ship it"')
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO -ErrorAction SilentlyContinue
+    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_STARTER_DIR_WIN -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 

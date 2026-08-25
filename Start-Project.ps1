@@ -1,27 +1,29 @@
 # project-starter: the `start` command for PowerShell.
 #
-#   start                       pick an existing project (fzf if installed, else numbered list;
-#                               shows saved intent + last-active time)
-#   start <name> [words...]     create <root>\<name> + git repo, launch agent in a NEW TAB;
-#                               extra words become the agent's initial prompt AND are saved
-#                               as the project's intent
-#   start <name> ... -Yolo      appends the agent's auto-approval flag (opt-in per run)
+#   start                      pick an existing project (fzf if installed, else numbered list;
+#                              shows saved intent + last-active time)
+#   start <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
+#                              extra words become the agent's initial prompt AND are saved
+#                              as the project's intent
+#   start <name> ... -Yolo     appends the agent's auto-approval flag (opt-in per run)
+#   start -Agent <name>        force the agent for a NEW project (skips picker/default)
+#   start -SetDefaultAgent <name>   persist the default agent ('' clears); used whenever
+#                              it is installed, before any picker would fire
+#   start -Doctor              audit dependencies, agents, config, hooks
 #
 #   Reopening an existing project auto-resumes with the agent that last ran there:
-#   recorded in <project>\.ps-project.json ({agent,intent,created,updated}), falling
-#   back to .claude/.codex/.gemini fingerprints and omp's own session buckets.
+#   recorded in .ps-project.json ({agent,intent,created,updated}), falling back to
+#   .claude/.codex/.gemini fingerprints and omp's own session buckets.
 #
 #   AGENT REGISTRY: built-ins below; an optional agents.json next to this script
 #   merges over them. Per-agent keys:
 #     continueArgs           argv used to resume (array)
 #     takesPromptOnContinue  whether extra words may ride along on resume (bool)
-#     yoloFlags              argv appended by -Yolo (array)
-#   Example agents.json:
-#     { "aider": { "continueArgs": ["--resume","--last"],
-#                  "takesPromptOnContinue": false,
-#                  "yoloFlags": ["--yes-always"] } }
+#     yoloFlags              argv appended by -Yolo (array; empty -> warns)
 #
-#   -Here   launch inline instead of a new tab.  Root: $env:OMP_PROJECTS_DIR (default C:\projects)
+#   -Here   launch inline instead of a new tab.
+#   Root:   $env:OMP_PROJECTS_DIR (default C:\projects)
+#   Config: %APPDATA%\project-starter\config.json (override dir: $env:OMP_CONFIG_DIR)
 
 if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
     Remove-Item Alias:start -Force -ErrorAction SilentlyContinue
@@ -29,13 +31,23 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 
+# agent -> how to continue / go fast. Verified flags first; best-effort profiles
+# (aider/opencode/qwen) intentionally carry empty or conservative values so a
+# wrong guess warns instead of misbehaving.
+$script:AgentProfiles = @{
+    omp      = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--approval-mode', 'yolo') }
+    claude   = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--dangerously-skip-permissions') }
+    codex    = @{ ContinueArgs = @('resume', '--last'); TakesPromptOnContinue = $false; YoloFlags = @('--full-auto') }
+    gemini   = @{ ContinueArgs = @();                   TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
+    # best-effort profiles
+    aider    = @{ ContinueArgs = @('--resume');         TakesPromptOnContinue = $false; YoloFlags = @('--yes-always') }
+    opencode = @{ ContinueArgs = @('--continue');       TakesPromptOnContinue = $true;  YoloFlags = @() }
+    qwen     = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
+}
+
 function global:Get-StarterAgents {
-    $table = @{
-        omp    = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--approval-mode', 'yolo') }
-        claude = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--dangerously-skip-permissions') }
-        codex  = @{ ContinueArgs = @('resume', '--last'); TakesPromptOnContinue = $false; YoloFlags = @('--full-auto') }
-        gemini = @{ ContinueArgs = @();                   TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
-    }
+    $table = @{}
+    foreach ($k in $script:AgentProfiles.Keys) { $table[$k] = $script:AgentProfiles[$k].Clone() }
     $registry = Join-Path $script:StarterRoot 'agents.json'
     if (Test-Path -LiteralPath $registry) {
         try {
@@ -56,6 +68,30 @@ function global:Get-StarterAgents {
 }
 
 $script:AgentProfiles = Get-StarterAgents
+
+function global:Get-StarterConfigPath {
+    if ($env:OMP_CONFIG_DIR) { return $env:OMP_CONFIG_DIR }
+    $base = [Environment]::GetFolderPath('ApplicationData')
+    if (-not $base) { $base = if ($env:TEMP) { $env:TEMP } else { 'C:\Windows\Temp' } }
+    Join-Path $base 'project-starter'
+}
+
+function global:Get-StarterDefaultAgent {
+    $p = Join-Path (Get-StarterConfigPath) 'config.json'
+    if (Test-Path -LiteralPath $p) {
+        try { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json).defaultAgent } catch { }
+    }
+    $null
+}
+
+function global:Set-StarterDefaultAgent([string]$Agent) {
+    $dir = Get-StarterConfigPath
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    @{ defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() } } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir 'config.json') -Encoding utf8
+    if ([string]::IsNullOrWhiteSpace($Agent)) { Write-Host 'default agent cleared' }
+    else { Write-Host "default agent set to '$($Agent.Trim())'" }
+}
 
 function global:Get-ProjectAgent {
     param([string]$Dir)
@@ -154,6 +190,27 @@ function global:Select-StarterProject {
     $null
 }
 
+function global:Select-StarterAgent {
+    param([string[]]$Candidates)
+    if ($Candidates.Count -eq 0) { return 'omp' }
+    if ((@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
+        $picked = @($Candidates | Sort-Object) | fzf --height 30% --reverse --prompt 'agent> '
+        if ($LASTEXITCODE -eq 0 -and $picked -and $script:AgentProfiles.ContainsKey($picked.Trim())) {
+            return $picked.Trim()
+        }
+        return $null
+    }
+    for ($i = 0; $i -lt $Candidates.Count; $i++) {
+        ('{0,3}. {1}' -f ($i + 1), $Candidates[$i]) | Write-Host
+    }
+    $answer = Read-Host 'agent number (blank = omp)'
+    if ($answer -match '^\d+$') {
+        $n = [int]$answer
+        if ($n -ge 1 -and $n -le $Candidates.Count) { return $Candidates[$n - 1] }
+    }
+    $null
+}
+
 function global:start {
     [CmdletBinding()]
     param(
@@ -163,18 +220,64 @@ function global:start {
         [string[]]$Prompt,
         [switch]$Yolo,
         [switch]$Here,
-        [switch]$FromLauncher
+        [switch]$FromLauncher,
+        [string]$Agent,
+        [string]$SetDefaultAgent,
+        [switch]$Doctor
     )
+
+    # --- management modes ------------------------------------------------
+    if ($PSBoundParameters.ContainsKey('SetDefaultAgent')) {
+        Set-StarterDefaultAgent -Agent $SetDefaultAgent
+        return
+    }
+    if ($Doctor) {
+        Write-Host '== project-starter doctor =='
+        foreach ($tool in @('git', 'wt', 'fzf', 'pwsh', 'powershell')) {
+            $c = @(Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+            if ($c) { Write-Host ("[ok] {0,-11} {1}" -f $tool, $c.Source) }
+            else { Write-Host ("[--] {0,-11} not found" -f $tool) }
+        }
+        foreach ($a in ($script:AgentProfiles.Keys | Sort-Object)) {
+            $exe = @(Get-Command $a -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+            $p = $script:AgentProfiles[$a]
+            $state = if (-not $exe) { 'not installed' }
+                     elseif ($p.YoloFlags.Count -eq 0) { 'installed; -Yolo will warn (no yoloFlags)' }
+                     else { 'ready' }
+            Write-Host ("[{0}] agent {1,-9} {2}" -f ($(if ($exe) { 'ok' } else { '--' })), $a, $state)
+        }
+        $rootNow = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
+        try { $rootNow = [System.IO.Path]::GetFullPath($rootNow) } catch { }
+        $writable = $false
+        try {
+            $probe = Join-Path $rootNow '.doctor-probe'
+            New-Item -ItemType File -Path $probe -Force | Out-Null
+            Remove-Item -LiteralPath $probe -Force
+            $writable = $true
+        } catch { }
+        Write-Host ("[{0}] projects root {1} (writable={2})" -f ($(if ($writable) { 'ok' } else { '!!' })), $rootNow, $writable)
+        $def = Get-StarterDefaultAgent
+        Write-Host ("[--] default agent: {0}" -f ($(if ($def) { $def } else { '<unset - picker decides on new projects>' })))
+        $ar = (Get-ItemProperty 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
+        Write-Host ("[{0}] cmd AutoRun hook" -f ($(if ($ar -match 'project-starter') { 'ok' } else { '--' })))
+        foreach ($rcf in @('$HOME\.bashrc', '$HOME\.zshrc')) {
+            $rp = $ExecutionContext.InvokeCommand.ExpandString($rcf)
+            $hit = (Test-Path -LiteralPath $rp) -and (Get-Content -LiteralPath $rp -ErrorAction SilentlyContinue | Where-Object { $_ -match 'project-starter' })
+            Write-Host ("[{0}] {1}" -f ($(if ($hit) { 'ok' } else { '--' })), $rp)
+        }
+        return
+    }
 
     $yoloWanted = [bool]$Yolo
 
     if ($FromLauncher) {
         # relaunched inside the new tab; state travels via inherited env vars
-        $Name       = $env:OMP_START_NAME
-        $raw        = $env:OMP_START_PROMPT
-        $Prompt     = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
-        $yoloWanted = ($env:OMP_START_YOLO -eq '1')
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO -ErrorAction SilentlyContinue
+        $Name          = $env:OMP_START_NAME
+        $raw           = $env:OMP_START_PROMPT
+        $Prompt        = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
+        $yoloWanted    = ($env:OMP_START_YOLO -eq '1')
+        $launcherAgent = $env:OMP_START_AGENT
+        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
     }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {
@@ -222,9 +325,43 @@ function global:start {
         Write-Host 'initialized git repo'
     }
 
-    $agent = if ($isNew) { 'omp' } else { Get-ProjectAgent -Dir $dir }
-    $intentWords = if ($Prompt) { $Prompt -join ' ' } else { $null }
-    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $intentWords
+    # --- agent resolution -------------------------------------------------
+    if (-not $isNew) {
+        $agent = Get-ProjectAgent -Dir $dir
+    } else {
+        $installed = @($script:AgentProfiles.Keys | Where-Object {
+            @(Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue).Count -gt 0
+        } | Sort-Object)
+        if ($Agent) {
+            if (-not $script:AgentProfiles.ContainsKey($Agent)) {
+                Write-Error "unknown agent '$Agent' (known: $($script:AgentProfiles.Keys -join ', '))"
+                return
+            }
+            if (($installed | Where-Object { $_ -eq $Agent }).Count -eq 0) {
+                Write-Warning "'$Agent' is registered but not found on PATH; launching anyway"
+            }
+            $agent = $Agent
+        }
+        elseif ($FromLauncher -and $launcherAgent) { $agent = $launcherAgent }
+        else {
+            $def = Get-StarterDefaultAgent
+            if ($def -and ($installed | Where-Object { $_ -eq $def })) {
+                $agent = $def
+                Write-Host "using default agent '$def' (change: start -SetDefaultAgent <name>|none)"
+            }
+            elseif ($installed.Count -eq 1) { $agent = $installed[0] }
+            elseif ($installed.Count -gt 1) {
+                $agent = Select-StarterAgent -Candidates $installed
+                if (-not $agent) { $agent = 'omp' }
+                Write-Host "selected agent: $agent (make permanent: start -SetDefaultAgent $agent)"
+            }
+            else {
+                $agent = 'omp'
+                Write-Warning 'no registered agents found on PATH; defaulting to omp'
+            }
+        }
+    }
+    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
 
     # default: hand off to a fresh Windows Terminal tab
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
@@ -232,6 +369,7 @@ function global:start {
         $env:OMP_START_NAME   = $Name
         $env:OMP_START_PROMPT = if ($Prompt) { $Prompt -join ' ' } else { '' }
         $env:OMP_START_YOLO   = if ($yoloWanted) { '1' } else { '' }
+        $env:OMP_START_AGENT  = $agent
         $sh = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
         $shellExe = if ($sh) { $sh.Source } else { Join-Path $PSHOME 'powershell.exe' }
         $launcher = Join-Path $script:StarterRoot 'Start-InTab.ps1'
@@ -241,7 +379,7 @@ function global:start {
             return
         }
         Write-Warning "wt exited with $($LASTEXITCODE); launching inline instead"
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO -ErrorAction SilentlyContinue
+        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
     }
 
     Set-Location -LiteralPath $dir

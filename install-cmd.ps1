@@ -1,6 +1,7 @@
 # Registers/unregisters an interactive-only doskey `start` macro for cmd.exe.
 # Installs shell\cmd-autorun.bat and chains it into HKCU Command Processor AutoRun.
-# The .bat skips itself when cmd runs with /c or /k, so scripted `cmd /c start ...`
+# The .bat skips itself when cmd runs with /c or /k using DELAYED EXPANSION so the
+# quoted %cmdcmdline% value never re-parses; scripted `cmd /c start ...` therefore
 # keeps using cmd's built-in start.
 param([switch]$Remove)
 
@@ -16,10 +17,17 @@ if (-not $Remove) {
     # generate the autorun hook with this checkout's absolute path
     $lines = @(
         '@echo off',
-        'rem project-starter: `start` macro for INTERACTIVE cmd only (skips /c and /k).'
-        ('echo %cmdcmdline% | findstr /i /c:" /c" /c:" /k" >nul && exit /b 0')
-        ('doskey start="' + $bat + '" $*')
+        'rem project-starter: `start` macro for INTERACTIVE cmd only.',
+        'setlocal enabledelayedexpansion',
+        'set "PS_CL=%cmdcmdline%"',
+        'if defined PS_CL (',
+        '    if not "!PS_CL:/c=!"=="!PS_CL!" exit /b 0',
+        '    if not "!PS_CL:/k=!"=="!PS_CL!" exit /b 0',
+        ')',
+        ('doskey start="' + $bat + '" $*'),
+        'endlocal'
     )
+    New-Item -ItemType Directory -Force -Path (Split-Path $bat -Parent) | Out-Null
     Set-Content -LiteralPath $bat -Value ($lines -join "`r`n") -Encoding ascii
 
     if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
@@ -36,7 +44,6 @@ if (-not $Remove) {
         New-ItemProperty -Path $key -Name AutoRun -Value $new -PropertyType String | Out-Null
     }
     Write-Host "installed: $key\AutoRun"
-    Write-Host 'new cmd windows get `start`; `cmd /c start ...` scripts are untouched.'
 } else {
     $cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
     if (-not $cur -or $cur -notmatch 'project-starter') {

@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    env:
+      STARTER_DIR: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Engine matrix (Windows PowerShell 5.1)
+        shell: powershell
+        run: tests/run-tests.ps1
+
+      - name: Cross-shell shims (pwsh + Git-bash/cmd children)
+        shell: pwsh
+        run: tests/run-tests-crossshell.ps1
+
+      - name: Doctor smoke
+        shell: pwsh
+        run: |
+          . ./Start-Project.ps1
+          start -Doctor
