@@ -1,14 +1,22 @@
 # Reproducible local release packaging for project-starter.
-# Usage: ./scripts/release-local.ps1 -Tag v0.4.1
-# Runs from the REPO ROOT (git rev-parse --show-toplevel) so git archive
-# captures the full committed tree. Uses raw .NET SHA256 - no cmdlet
-# availability required.
+# Usage: ./scripts/release-local.ps1 -Tag v0.5.2
+# Order matters: the TAG must exist before git archive can read it.
+# Uses raw .NET SHA256 - no cmdlet availability required.
 param([Parameter(Mandatory)][string]$Tag)
 $ErrorActionPreference = 'Stop'
 $repoRoot = (git rev-parse --show-toplevel).Trim()
+if (-not $repoRoot) { throw 'not inside a git repository' }
 Set-Location $repoRoot
-$zipPath = Join-Path $repoRoot "project-starter-$Tag.zip"
 
+# fail fast if the tag is missing locally
+git rev-parse -q --verify "refs/tags/$Tag" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    git tag -a $Tag -m "$Tag"
+    if ($LASTEXITCODE -ne 0) { throw "failed to create tag $Tag" }
+    Write-Output ("created tag {0}" -f $Tag)
+}
+
+$zipPath = Join-Path $repoRoot "project-starter-$Tag.zip"
 git archive --format=zip "--output=$zipPath" $Tag
 
 $sha = [System.Security.Cryptography.SHA256]::Create()
