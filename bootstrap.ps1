@@ -78,6 +78,7 @@ if (Test-Path (Join-Path $dest '.git')) {
 Remove-Item $tmpZip, $tmpExt -Recurse -Force -ErrorAction SilentlyContinue
 
 & (Join-Path $dest 'install.ps1')
+& (Join-Path $dest 'install-cmd.ps1')
 
 # wire the bash/zsh face using an MSYS2 bash (the WindowsApps bash.exe is a WSL
 # launcher that cannot read Windows paths)
