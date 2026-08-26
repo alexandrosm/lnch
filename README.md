@@ -8,7 +8,7 @@ One word from any shell to a running AI coding agent inside a fresh, git-initial
 start my-app build a snake game
 ```
 
-creates the project folder, runs `git init`, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
+creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
 
 ## Install
 
@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.project-starter\bootstrap.ps1 -Version v0.5.0   # after initial install
+& ~\.project-starter\bootstrap.ps1 -Version v0.5.1   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -60,7 +60,7 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the capab
 | `start <name> ... -Here` / `--here` | Launch in the current window instead of a new tab |
 | `start -Agent <name>` / `--agent` | Force the agent for a new project |
 | `start -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
-| `start -Version` / `--version` | Print engine version |
+| `start -Version` / `--version` / `-v` | Print engine version |
 | `start -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
@@ -118,20 +118,20 @@ v0.3-style entries (`continueArgs` / `yoloFlags` / `takesPromptOnContinue`) auto
 
 Run `start -Doctor` for the live capability matrix on your machine.
 
-## Per-project metadata
+## Per-project metadata & user config
 
-`.ps-project.json` in each project root:
+`.ps-project.json` in each project root stores `{agent, intent, created, updated}` — plain JSON, safe to edit.
+
+User config lives in `%APPDATA%\project-starter\config.json`:
 
 ```json
 {
-  "agent": "omp",
-  "intent": ":yolo build a snake game",
-  "created": "2026-08-23T10:00:00.0000000Z",
-  "updated": "2026-08-23T12:30:00.0000000Z"
+  "defaultAgent": "omp",
+  "postCreate": ["npm init -y", "git config commit.template .gitmessage"]
 }
 ```
 
-Plain JSON, safe to edit or commit-ignore. User config lives separately in `%APPDATA%\project-starter\config.json` (`{"defaultAgent": "..."}`).
+`postCreate` commands run inside freshly created project directories (failures warn, never block).
 
 ## Requirements
 
@@ -142,7 +142,7 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (30 checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (34 checks)
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
 

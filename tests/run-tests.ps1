@@ -16,7 +16,7 @@ $env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerSh
 
 $env:OMP_PROJECTS_DIR = $Projects
 
-# redirected user-config so the persisted-default tests never touch real %APPDATA%
+# redirected user-config so persisted-default/hook tests never touch real %APPDATA%
 $env:OMP_CONFIG_DIR = Join-Path $TestRoot 'config'
 New-Item -ItemType Directory -Force -Path $env:OMP_CONFIG_DIR | Out-Null
 
@@ -31,7 +31,7 @@ $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $
 }
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
 
-# deterministic fresh-project agent: seed the default so pickers never fire in A-I/K
+# deterministic fresh-project agent: seed the default so pickers never fire in A-O
 @{ defaultAgent = 'omp' } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:OMP_CONFIG_DIR 'config.json') -Encoding utf8
 
@@ -43,42 +43,44 @@ function Meta([string]$p) { Get-Content -LiteralPath (Join-Path $Projects "$p\.p
 
 try {
     . (Join-Path $StarterDir 'Start-Project.ps1')
-    $__sf = ${function:start}
-    if (-not $__sf) { throw 'start function failed to load' }
+    $__startFn = ${function:start}
+    if (-not $__startFn) { throw 'start function failed to load' }
 
-    Write-Host '=== A: fresh, prompt, metadata ==='
-    $out = & $__sf alpha hello world -Here
+    Write-Host '=== A: fresh, prompt, metadata, scaffold ==='
+    $out = & $__startFn alpha hello world -Here
     Check 'A git'          (Test-Path (Join-Path $Projects 'alpha\.git'))
     Check 'A prompt'       (($out -join ' ') -match '\[omp-stub\] args="hello world"')
+    Check 'A agents-md'    (Test-Path (Join-Path $Projects 'alpha\AGENTS.md'))
+    Check 'A claude-ptr'   ((Get-Content (Join-Path $Projects 'alpha\CLAUDE.md') -Raw) -match '@AGENTS.md')
     $m = Meta 'alpha'
     Check 'A meta agent'   ($m -match '"agent":\s*"omp"')
     Check 'A meta intent'  ($m -match 'hello world')
 
     Write-Host '=== B: resume omp -c ==='
-    $out = & $__sf alpha -Here
+    $out = & $__startFn alpha -Here
     Check 'B continue'     (($out -join ' ') -match '\[omp-stub\] args=-c ')
 
     Write-Host '=== C: claude fingerprint ==='
     New-Item -ItemType Directory -Path (Join-Path $Projects 'beta\.claude') -Force | Out-Null
-    $out = & $__sf beta -Here
+    $out = & $__startFn beta -Here
     Check 'C claude'       (($out -join ' ') -match '\[claude-stub\] args=-c')
 
     Write-Host '=== D: codex drops prompt on resume ==='
     New-Item -ItemType Directory -Path (Join-Path $Projects 'gamma\.codex') -Force | Out-Null
-    $out = & $__sf gamma some prompt -Here
+    $out = & $__startFn gamma some prompt -Here
     $j = $out -join ' '
     Check 'D resume last'  ($j -match '\[codex-stub\] args=resume --last')
     Check 'D no prompt'    (!($j -match 'some prompt'))
 
-    Write-Host '=== E: theta created with intent; bare start -> fzf line -> resumed ==='
-    $out = & $__sf theta build a snake game -Here
+    Write-Host '=== E: theta intent; bare start -> fzf line -> resumed ==='
+    $out = & $__startFn theta build a snake game -Here
     Check 'E fresh theta'  (($out -join ' ') -match '\[omp-stub\] args="build a snake game"')
-    $out = & $__sf -Here
+    $out = & $__startFn -Here
     Check 'E picked theta' (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'E intent saved' ((Meta 'theta') -match 'build a snake game')
 
     Write-Host '=== F: new-tab handoff env contract ==='
-    $out = & $__sf epsilon hi there
+    $out = & $__startFn epsilon hi there
     $j = $out -join ' '
     Check 'F wt spawned'   ($j -match 'WT-STUB .*Start-InTab\.ps1')
     Check 'F name'         ($env:OMP_START_NAME -eq 'epsilon')
@@ -86,72 +88,75 @@ try {
     Check 'F yolo empty'   (-not $env:OMP_START_YOLO)
     Check 'F agent env'    ($env:OMP_START_AGENT -eq 'omp')
     $env:OMP_START_NAME = 'zeta'; $env:OMP_START_PROMPT = 'hi there'; $env:OMP_START_YOLO = ''; $env:OMP_START_AGENT = ''
-    $out = & $__sf -FromLauncher
+    $out = & $__startFn -FromLauncher
     Check 'F launcher fresh prompt' (($out -join ' ') -match '\[omp-stub\] args="hi there"')
 
     Write-Host '=== G: root escape rejected ==='
-    try { & $__sf ..\evil -Here; Check 'G reject' $false } catch { Check 'G reject' $true }
+    try { & $__startFn ..\evil -Here; Check 'G reject' $false } catch { Check 'G reject' $true }
 
-    Write-Host '=== H: registry agent via v1-style legacy marker ==='
+    Write-Host '=== H: registry agent via legacy marker ==='
     New-Item -ItemType Directory -Path (Join-Path $Projects 'beta2') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $Projects 'beta2\.ps-project.json') -Value '{"agent":"aider","updated":"2026-01-01T00:00:00.0000000Z"}'
-    $out = & $__sf beta2 -Here
+    $out = & $__startFn beta2 -Here
     Check 'H aider resume' (($out -join ' ') -match '\[aider-stub\] args=--resume --last')
 
     Write-Host '=== I/J: -Yolo maps to mode:yolo cap ==='
-    $out = & $__sf iota hi -yolo -Here
+    $out = & $__startFn iota hi -yolo -Here
     Check 'I omp yolo+prompt' (($out -join ' ') -match '\[omp-stub\] args=--approval-mode yolo hi')
     New-Item -ItemType Directory -Path (Join-Path $Projects 'jay') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $Projects 'jay\.ps-project.json') -Value '{"agent":"bare","updated":"2026-01-01T00:00:00.0000000Z"}'
-    $out = & $__sf jay p -yolo -Here
+    $out = & $__startFn jay p -yolo -Here
     Check 'J bare plain'   (($out -join ' ') -match '\[bare-stub\] args=p')
 
     Write-Host '=== K: yolo rides the tab handoff ==='
-    $out = & $__sf kappa go -yolo
+    $out = & $__startFn kappa go -yolo
     $j = $out -join ' '
     Check 'K handed off'   ($j -match 'WT-STUB')
     Check 'K env yolo'     ($env:OMP_START_YOLO -eq '1')
     Check 'K env agent'    ($env:OMP_START_AGENT -eq 'omp')
     $env:OMP_START_NAME = 'kappa'; $env:OMP_START_PROMPT = 'go'; $env:OMP_START_YOLO = '1'; $env:OMP_START_AGENT = 'omp'
-    $out = & $__sf -FromLauncher
+    $out = & $__startFn -FromLauncher
     Check 'K resume+yolo+prompt' (($out -join ' ') -match '\[omp-stub\] args=-c --approval-mode yolo go')
     Check 'K env cleared' ((-not $env:OMP_START_NAME) -and (-not $env:OMP_START_YOLO))
 
-    Write-Host '=== P: :pick capability verb ==='
-    $out = & $__sf alpha :pick -Here 2>&1
-    Check 'P pick -r'      (($out -join ' ') -match '\[omp-stub\] args=-r\b')
-
-    Write-Host '=== Q: :model capability verb (fresh) ==='
-    $out = & $__sf nu4 :model opus -Agent omp -Here
-    Check 'Q model opus'   (($out -join ' ') -match '\[omp-stub\] args=--model opus')
-
-    Write-Host '=== R: unsupported capability warns and skips ==='
-    $out = & $__sf jay2 hi :plan -Here 2>&1 3>&1
-    $j = $out -join ' '
-    Check 'R warns'        ($j -match 'does not support :plan')
-    Check 'R no plan args' ((!($j -match '--permission-mode')))
-
     Write-Host '=== L: default agent persisted and honored ==='
-    & $__sf -SetDefaultAgent claude
-    $out = & $__sf zeta3 build a castle -Here
+    & $__startFn -SetDefaultAgent claude
+    $out = & $__startFn zeta3 build a castle -Here
     Check 'L default claude' (($out -join ' ') -match '\[claude-stub\] args="build a castle"')
 
     Write-Host '=== M: cleared default -> agent picker over installed agents ==='
-    & $__sf -SetDefaultAgent ''
-    $out = & $__sf eta x -Here
+    & $__startFn -SetDefaultAgent ''
+    $out = & $__startFn eta x -Here
     Check 'M picker aider' (($out -join ' ') -match '\[aider-stub\] args=x')
 
     Write-Host '=== N: doctor audit incl capability matrix ==='
-    $out = & powershell.exe -NoProfile -Command ". '$StarterDir\Start-Project.ps1'; start -Doctor" 2>&1
+    $env:OMP_STARTER_DIR_WIN = $StarterDir
+    $out = & powershell.exe -NoProfile -Command '. "$env:OMP_STARTER_DIR_WIN\Start-Project.ps1"; start -Doctor' 2>&1
     $j = $out -join ' '
     Check 'N doctor runs'  ($j -match 'project-starter doctor')
     Check 'N git ok'       ($j -match '\[ok\] git')
     Check 'N cap matrix'   ($j -match 'resume-pick')
+    Check 'N hooks line'   ($j -match 'post-create hooks configured')
 
     Write-Host '=== O: entry.ps1 --agent passthrough ==='
     $entry = Join-Path $StarterDir 'entry.ps1'
     $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude kappa2 ship it --here 2>&1
     Check 'O entry agent'  (($out -join ' ') -match '\[claude-stub\] args="ship it"')
+
+    Write-Host '=== P: :pick replaces base resume ==='
+    $out = & $__startFn alpha :pick -Here 2>&1
+    $j = $out -join ' '
+    Check 'P pick only'    (($j -match 'args=-r\b') -and (!($j -match 'args=-c\b')))
+
+    Write-Host '=== Q: :model capability verb (fresh) ==='
+    $out = & $__startFn nu4 :model opus -Agent omp -Here 2>&1
+    Check 'Q model opus'   (($out -join ' ') -match '\[omp-stub\] args=--model opus')
+
+    Write-Host '=== R: unsupported capability warns and skips ==='
+    $out = & $__startFn jay hi :plan -Here 2>&1 3>&1
+    $j = $out -join ' '
+    Check 'R warns'        ($j -match 'does not support :plan')
+    Check 'R no plan args' ((!($j -match '--permission-mode')))
 
     Write-Host '=== S: v0.3 legacy agents.json auto-migrates ==='
     @'
@@ -161,10 +166,18 @@ try {
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
     $reg = Get-StarterAgentRegistry
     Check 'S legacy mapped' ($reg['aider'].Caps['resume'].Args.Count -eq 2 -and $reg['aider'].TakesPromptOnResume -eq $false)
+
+    Write-Host '=== T: post-create hook runs in fresh project ==='
+    @'
+{ "defaultAgent": "omp", "postCreate": ["Set-Content hooked.txt -Value hooked"] }
+'@ | Set-Content -LiteralPath (Join-Path $env:OMP_CONFIG_DIR 'config.json') -Encoding utf8
+    $out = & $__startFn wabbit build it -Here 2>&1
+    Check 'T hook ran'     (Test-Path (Join-Path $Projects 'wabbit\hooked.txt'))
+    Check 'T hook prompt'  (($out -join ' ') -match 'args="build it"')
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
+    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_STARTER_DIR_WIN -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 
@@ -174,4 +187,3 @@ if ($script:fail -eq 0) {
     Write-Host "RESULT: $script:fail FAILED"
     exit 1
 }
-

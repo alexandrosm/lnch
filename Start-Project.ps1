@@ -158,7 +158,7 @@ function global:Get-StarterDefaultAgent {
     $null
 }
 
-function global:Get-StarterPostCreateHooks {
+function global:Get-StarterPostCreateHook {
     $c = Get-StarterUserConfig
     if ($c -and $c.postCreate) { return @($c.postCreate) }
     @()
@@ -365,7 +365,7 @@ function global:start {
             $tag = if ($exe) { 'ok' } else { '--' }
             Write-Host ("[{0}] {1,-9} {2}" -f $tag, $a, ($cells -join ' '))
         }
-        $hooks = @(Get-StarterPostCreateHooks)
+        $hooks = @(Get-StarterPostCreateHook)
         Write-Host ("[--] post-create hooks configured: {0}" -f $hooks.Count)
         $rootNow = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
         try { $rootNow = [System.IO.Path]::GetFullPath($rootNow) } catch { }
@@ -548,13 +548,6 @@ function global:start {
     }
     Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
 
-    # --- post-create hooks (fresh projects only) ---------------------------
-    if ($isNew) {
-        foreach ($h in (Get-StarterPostCreateHooks)) {
-            Write-Host "post-create hook: $h"
-            try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
-        }
-    }
 
     # default: hand off to a fresh Windows Terminal tab
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
@@ -576,6 +569,13 @@ function global:start {
     }
 
     Set-Location -LiteralPath $dir
+    # --- post-create hooks (fresh projects only) ---------------------------
+    if ($isNew) {
+        foreach ($h in (Get-StarterPostCreateHook)) {
+            Write-Host "post-create hook: $h"
+            try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
+        }
+    }
 
     # --- apply capabilities ------------------------------------------------
     $p        = $script:AgentProfiles[$agent]
