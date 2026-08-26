@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.3
+
+- Default project root is now `<current working directory>\projects` at invocation time; `OMP_PROJECTS_DIR` remains the explicit override.
+- Picker, doctor, tab completion, and project creation share one root resolver.
+
 ## v0.5.2
 
 - Fresh-project tab handoffs preserve first-session state, so the child launches the agent normally instead of incorrectly adding resume flags (`omp -c`) before a session exists.

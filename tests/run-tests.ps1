@@ -185,6 +185,29 @@ try {
     $out = & $__startFn wabbit build it -Here 2>&1
     Check 'T hook ran'     (Test-Path (Join-Path $Projects 'wabbit\hooked.txt'))
     Check 'T hook prompt'  (($out -join ' ') -match 'args="build it"')
+
+    Write-Host '=== U: dynamic current-dir root + explicit override ==='
+    $originalLocation = Get-Location
+    $originalRoot = $env:OMP_PROJECTS_DIR
+    try {
+        $caller = Join-Path $TestRoot 'caller'
+        New-Item -ItemType Directory -Force -Path $caller | Out-Null
+        Set-Location -LiteralPath $caller
+        Remove-Item Env:OMP_PROJECTS_DIR -ErrorAction SilentlyContinue
+        $expectedLocalRoot = Join-Path $caller 'projects'
+        Check 'U helper current-dir' ((Get-StarterProjectsRoot) -eq [System.IO.Path]::GetFullPath($expectedLocalRoot))
+        $out = & $__startFn localroot hi -Agent omp -Here
+        Check 'U local project' (Test-Path (Join-Path $expectedLocalRoot 'localroot\.git'))
+
+        $overrideRoot = Join-Path $TestRoot 'explicit-root'
+        $env:OMP_PROJECTS_DIR = $overrideRoot
+        $out = & $__startFn overridden hi -Agent omp -Here
+        Check 'U explicit override' (Test-Path (Join-Path $overrideRoot 'overridden\.git'))
+    } finally {
+        Set-Location -LiteralPath $originalLocation
+        if ($originalRoot) { $env:OMP_PROJECTS_DIR = $originalRoot }
+        else { Remove-Item Env:OMP_PROJECTS_DIR -ErrorAction SilentlyContinue }
+    }
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }

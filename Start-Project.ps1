@@ -28,7 +28,7 @@
 #     v0.3 legacy: continueArgs / takesPromptOnContinue / yoloFlags (auto-migrated)
 #
 #   -Here   launch inline instead of a new tab.
-#   Root:   $env:OMP_PROJECTS_DIR (default C:\projects)
+#   Root:   $env:OMP_PROJECTS_DIR, otherwise <current working directory>\projects
 #   Config: %APPDATA%\project-starter\config.json (override dir: $env:OMP_CONFIG_DIR)
 
 if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
@@ -36,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.5.2'
+$script:StarterVersion = '0.5.3'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -142,6 +142,14 @@ function global:Get-StarterConfigPath {
     $base = [Environment]::GetFolderPath('ApplicationData')
     if (-not $base) { $base = if ($env:TEMP) { $env:TEMP } else { 'C:\Windows\Temp' } }
     Join-Path $base 'project-starter'
+}
+
+function global:Get-StarterProjectsRoot {
+    if ($env:OMP_PROJECTS_DIR) {
+        return [System.IO.Path]::GetFullPath($env:OMP_PROJECTS_DIR)
+    }
+    $cwd = (Get-Location).Path
+    return [System.IO.Path]::GetFullPath((Join-Path $cwd 'projects'))
 }
 
 function global:Get-StarterUserConfig {
@@ -372,8 +380,7 @@ function global:start {
         }
         $hooks = @(Get-StarterPostCreateHook)
         Write-Host ("[--] post-create hooks configured: {0}" -f $hooks.Count)
-        $rootNow = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
-        try { $rootNow = [System.IO.Path]::GetFullPath($rootNow) } catch { }
+        try { $rootNow = Get-StarterProjectsRoot } catch { $rootNow = '<invalid>' }
         $writable = $false
         try {
             $probe = Join-Path $rootNow '.doctor-probe'
@@ -449,19 +456,18 @@ function global:start {
         $verbs.Insert(0, [pscustomobject]@{ Name = 'yolo' })
     }
 
+    try {
+        $rootFull = Get-StarterProjectsRoot
+    } catch {
+        Write-Error "projects root is invalid: $_"
+        return
+    }
+
     if ([string]::IsNullOrWhiteSpace($Name)) {
-        $rootGuess = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
-        $Name = Select-StarterProject -Root $rootGuess
+        $Name = Select-StarterProject -Root $rootFull
         if (-not $Name) { return }
     }
 
-    $root = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
-    try {
-        $rootFull = [System.IO.Path]::GetFullPath($root)
-    } catch {
-        Write-Error "OMP_PROJECTS_DIR '$root' is not a valid path"
-        return
-    }
     if (-not (Test-Path -LiteralPath $rootFull)) {
         New-Item -ItemType Directory -Path $rootFull -Force | Out-Null
     }
@@ -645,7 +651,7 @@ function global:start {
 # <Tab> completes project names from the projects root
 Register-ArgumentCompleter -CommandName start -ParameterName Name -ScriptBlock {
     param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
-    $root = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
+    try { $root = Get-StarterProjectsRoot } catch { return }
     if (Test-Path -LiteralPath $root) {
         Get-ChildItem -LiteralPath $root -Directory -Filter "$wordToComplete*" -ErrorAction SilentlyContinue |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_.Name) }

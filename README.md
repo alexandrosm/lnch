@@ -65,6 +65,8 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the capab
 
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
+By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `start` (for example, from `D:\work`, `start api` creates `D:\work\projects\api`). Set `OMP_PROJECTS_DIR` to override that root explicitly.
+
 ### ⚠️ `-Yolo` safety
 
 `-Yolo` appends each agent's auto-approval flag (e.g. `--approval-mode yolo`, `--dangerously-skip-permissions`). The agent will then **execute commands without asking you**. It is opt-in per invocation by design — never the default — and its effect is limited to the session it flags.
