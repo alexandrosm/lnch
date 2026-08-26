@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+- Bare `start` now has a polished dependency-free full-screen multi-select TUI: alternate-screen rendering, ANSI color, metadata-rich rows (agent, intent, activity), selected count, scrollable viewport, and keyboard controls for move/toggle/all/none/launch/cancel.
+- fzf mode receives a styled 85%-height multi-select interface with border, padding, inline status, markers, and all/none bindings; `OMP_NO_FZF=1` forces the built-in picker.
+- Real PTY verification selects two projects and asserts exact two-tab fan-out.
+
 ## v0.6.0
 
 - Bare `start` is now a multi-project launcher: fzf uses `--multi` (`Tab` toggles, `Enter` accepts), and the numbered fallback accepts lists/ranges such as `1,3-5` or `all`.

@@ -64,7 +64,21 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the capab
 | `start -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 
 
-Bare `start` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; without fzf, enter selections such as `1,3-5` or `all`. Each selected project follows its normal agent/resume metadata and opens in its own tab in the current Windows Terminal window.
+Bare `start` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata and opens in its own tab in the current Windows Terminal window.
+
+### Project picker UI
+
+Without fzf, bare `start` opens a full-screen multi-select TUI with project name, owning agent, saved intent, relative activity, selected count, and a scrollable viewport:
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Move |
+| `Space` | Toggle project |
+| `A` / `N` | Select all / none |
+| `Enter` | Launch selected projects (or highlighted project when none selected) |
+| `Esc` / `Q` | Cancel |
+
+With fzf, the launcher enables rounded borders, multi-select, inline status, selection markers, and `Ctrl-A`/`Ctrl-D` all/none bindings. Set `OMP_NO_FZF=1` to force the built-in TUI.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
 By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `start` (for example, from `D:\work`, `start api` creates `D:\work\projects\api`). Set `OMP_PROJECTS_DIR` to override that root explicitly.

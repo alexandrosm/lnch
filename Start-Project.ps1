@@ -36,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.6.0'
+$script:StarterVersion = '0.7.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -291,6 +291,104 @@ function global:ConvertFrom-StarterProjectSelection {
     return @($indexes)
 }
 
+function script:Get-StarterRelativeAge {
+    param([datetime]$When)
+    $span = (Get-Date) - $When
+    if ($span.TotalSeconds -lt 0 -or $span.TotalMinutes -lt 1) { return 'now' }
+    if ($span.TotalHours -lt 1) { return ('{0}m' -f [Math]::Floor($span.TotalMinutes)) }
+    if ($span.TotalDays -lt 1) { return ('{0}h' -f [Math]::Floor($span.TotalHours)) }
+    if ($span.TotalDays -lt 30) { return ('{0}d' -f [Math]::Floor($span.TotalDays)) }
+    return $When.ToString('yyyy-MM-dd')
+}
+
+function global:Select-StarterProjectConsole {
+    param([object[]]$Items, [string]$Root)
+    if ($Items.Count -eq 0) { return @() }
+
+    $selected = New-Object bool[] $Items.Count
+    $cursor = 0
+    $esc = [char]27
+    $reset = "$esc[0m"
+    $cyan = "$esc[96m"
+    $green = "$esc[92m"
+    $yellow = "$esc[93m"
+    $dim = "$esc[2m"
+    $reverse = "$esc[7m"
+
+    Write-Host "$esc[?1049h$esc[?25l" -NoNewline
+    try {
+        while ($true) {
+            $windowHeight = 30
+            $windowWidth = 100
+            try {
+                $windowHeight = $Host.UI.RawUI.WindowSize.Height
+                $windowWidth = $Host.UI.RawUI.WindowSize.Width
+            } catch { }
+            $visibleRows = [Math]::Max(4, [Math]::Min($Items.Count, $windowHeight - 12))
+            $half = [Math]::Floor($visibleRows / 2)
+            $offset = [Math]::Max(0, [Math]::Min($cursor - $half, $Items.Count - $visibleRows))
+            $last = [Math]::Min($Items.Count - 1, $offset + $visibleRows - 1)
+            $selectedCount = @($selected | Where-Object { $_ }).Count
+
+            Write-Host "$esc[2J$esc[H" -NoNewline
+            Write-Host ("{0}+-- PROJECT STARTER {1}:: MULTI-LAUNCH ---------------------------+{2}" -f $cyan, $dim, $reset)
+            Write-Host ("{0}|{1}  Root      {2}{3}{4}" -f $cyan, $reset, $dim, $Root, $reset)
+            Write-Host ("{0}|{1}  Selected  {2}{3}{4} of {5}" -f $cyan, $reset, $green, $selectedCount, $reset, $Items.Count)
+            Write-Host ("{0}+------------------------------------------------------------------+{1}" -f $cyan, $reset)
+            Write-Host ''
+
+            for ($i = $offset; $i -le $last; $i++) {
+                $item = $Items[$i]
+                $pointer = if ($i -eq $cursor) { '>' } else { ' ' }
+                $mark = if ($selected[$i]) { '[x]' } else { '[ ]' }
+                $markColor = if ($selected[$i]) { $green } else { $dim }
+                $name = $item.Name
+                if ($name.Length -gt 24) { $name = $name.Substring(0, 21) + '...' }
+                $agent = if ($item.Agent) { $item.Agent.ToUpper() } else { 'AUTO' }
+                if ($agent.Length -gt 10) { $agent = $agent.Substring(0, 10) }
+                $intentWidth = [Math]::Max(12, [Math]::Min(46, $windowWidth - 55))
+                $intent = if ($item.Intent) { $item.Intent } else { 'No saved intent yet' }
+                if ($intent.Length -gt $intentWidth) { $intent = $intent.Substring(0, $intentWidth - 3) + '...' }
+                $row = ' {0} {1} {2,-24} {3,-10} {4,-46} {5,10} ' -f $pointer, $mark, $name, $agent, $intent, $item.Age
+                if ($i -eq $cursor) {
+                    Write-Host ("{0}{1}{2}{3}" -f $reverse, $cyan, $row, $reset)
+                } else {
+                    Write-Host ("{0}{1}{2} {3}{4}{5} {6,-24} {7}{8,-10}{9} {10}{11,-46}{12} {13}{14,10}{15}" -f $dim, $pointer, $reset, $markColor, $mark, $reset, $name, $yellow, $agent, $reset, $dim, $intent, $reset, $dim, $item.Age, $reset)
+                }
+            }
+
+            if ($offset -gt 0 -or $last -lt $Items.Count - 1) {
+                Write-Host ("{0}  showing {1}-{2} of {3}{4}" -f $dim, ($offset + 1), ($last + 1), $Items.Count, $reset)
+            } else { Write-Host '' }
+            Write-Host ''
+            Write-Host ("{0} Up/Down{1} move   {0}Space{1} toggle   {0}A{1} all   {0}N{1} none   {0}Enter{1} launch   {0}Esc{1} cancel" -f $cyan, $reset)
+
+            $key = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+            switch ($key.VirtualKeyCode) {
+                38 { $cursor = if ($cursor -eq 0) { $Items.Count - 1 } else { $cursor - 1 } }
+                40 { $cursor = if ($cursor -eq $Items.Count - 1) { 0 } else { $cursor + 1 } }
+                36 { $cursor = 0 }
+                35 { $cursor = $Items.Count - 1 }
+                32 { $selected[$cursor] = -not $selected[$cursor] }
+                13 {
+                    $names = @()
+                    for ($i = 0; $i -lt $Items.Count; $i++) {
+                        if ($selected[$i]) { $names += $Items[$i].Name }
+                    }
+                    if ($names.Count -eq 0) { $names = @($Items[$cursor].Name) }
+                    return $names
+                }
+                27 { return @() }
+                65 { for ($i = 0; $i -lt $selected.Count; $i++) { $selected[$i] = $true } }
+                78 { for ($i = 0; $i -lt $selected.Count; $i++) { $selected[$i] = $false } }
+                81 { return @() }
+            }
+        }
+    } finally {
+        Write-Host "$esc[?25h$esc[?1049l" -NoNewline
+    }
+}
+
 function global:Select-StarterProjectSet {
     param([string]$Root)
     $dirs = @()
@@ -303,30 +401,60 @@ function global:Select-StarterProjectSet {
         return @()
     }
 
-    # line format: "<name>  |  <intent>"; picking parses the name before the pipe
-    $lines = foreach ($d in $dirs) {
+    $items = foreach ($d in $dirs) {
         $intent = $null
+        $agent = $null
+        $lastActive = $d.LastWriteTime
         $metaPath = Join-Path $d.FullName '.ps-project.json'
         if (Test-Path -LiteralPath $metaPath) {
-            try { $intent = (Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json).intent } catch { }
+            try {
+                $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+                $intent = $meta.intent
+                $agent = $meta.agent
+                if ($meta.updated) { $lastActive = [datetime]$meta.updated }
+            } catch { }
         }
-        $shown = $intent
-        if ($shown -and $shown.Length -gt 48) { $shown = $shown.Substring(0, 45) + '...' }
-        '{0}  |  {1}' -f $d.Name, $shown
+        [pscustomobject]@{
+            Name   = $d.Name
+            Intent = $intent
+            Agent  = $agent
+            Age    = script:Get-StarterRelativeAge $lastActive
+        }
     }
 
-    if ((@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
-        $picked = @($lines | fzf --multi --height 60% --reverse --prompt 'projects> ')
+    # line format: "<name>  |  <agent>  |  <intent>  |  <age>"
+    $lines = @($items | ForEach-Object {
+        $shown = if ($_.Intent) { $_.Intent } else { 'No saved intent yet' }
+        '{0}  |  {1}  |  {2}  |  {3}' -f $_.Name, $(if ($_.Agent) { $_.Agent.ToUpper() } else { 'AUTO' }), $shown, $_.Age
+    })
+
+    if (-not $env:OMP_NO_FZF -and (@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
+        $fzfArgs = @(
+            '--multi', '--height', '85%', '--layout', 'reverse', '--border', 'rounded',
+            '--margin', '1,2', '--padding', '1,2', '--info', 'inline',
+            '--prompt', 'Projects: ', '--pointer', '*', '--marker', '+',
+            '--header', 'TAB toggle - CTRL-A all - CTRL-D none - ENTER launch - ESC cancel',
+            '--bind', 'ctrl-a:select-all,ctrl-d:deselect-all'
+        )
+        $picked = @($lines | & fzf @fzfArgs)
         if ($LASTEXITCODE -ne 0) { return @() }
         return @($picked | Where-Object { $_ } | ForEach-Object { (($_ -split '\|')[0]).Trim() })
     }
 
-    for ($i = 0; $i -lt $dirs.Count; $i++) {
-        ('{0,3}. {1}' -f ($i + 1), $lines[$i]) | Write-Host
+    $interactive = $false
+    try { $interactive = ($Host.Name -eq 'ConsoleHost') -and (-not [Console]::IsInputRedirected) } catch { }
+    if ($interactive) {
+        try { return @(Select-StarterProjectConsole -Items $items -Root $Root) } catch {
+            Write-Warning "rich picker unavailable; using numbered fallback: $_"
+        }
+    }
+
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        ('{0,3}. {1,-24} {2,-10} {3}' -f ($i + 1), $items[$i].Name, $(if ($items[$i].Agent) { $items[$i].Agent } else { 'auto' }), $items[$i].Intent) | Write-Host
     }
     $answer = Read-Host 'project numbers (1,3-5 or all; blank cancels)'
-    $selectedIndexes = @(ConvertFrom-StarterProjectSelection -Selection $answer -Count $dirs.Count)
-    return @($selectedIndexes | ForEach-Object { (($lines[$_ - 1] -split '\|')[0]).Trim() })
+    $selectedIndexes = @(ConvertFrom-StarterProjectSelection -Selection $answer -Count $items.Count)
+    return @($selectedIndexes | ForEach-Object { $items[$_ - 1].Name })
 }
 
 function global:Select-StarterAgent {
