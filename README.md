@@ -138,6 +138,12 @@ v0.3-style entries (`continueArgs` / `yoloFlags` / `takesPromptOnContinue`) auto
 
 Run `lnch -Doctor` for the live capability matrix on your machine.
 
+## Agent state map
+
+[`agent-state-map.json`](agent-state-map.json) records the user/project roots, canonical transcripts, indexes, memories, checkpoints, caches, credential boundaries, resume commands, and native import/export routes for every built-in agent. It is migration discovery data, not a copy list: credentials are always excluded, mutable databases are read-only locators, caches are rebuilt, and approval/provider settings require semantic translation.
+
+Current native routes captured by the map: OMP imports Claude and Codex sessions; Codex imports Claude/Cursor setup and recent chats; OpenCode provides a native JSON export/import round trip; Qwen exports normalized JSON/JSONL. Gemini and Aider require source-format translation.
+
 ## Per-project metadata & user config
 
 `.lnch.json` in each project root stores `{agent, intent, created, updated}` — plain JSON, safe to edit.

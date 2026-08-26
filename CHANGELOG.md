@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added an evidence-backed, machine-readable state map for all seven built-in agents, with explicit transcript, config, memory, checkpoint, index, cache, credential, and native interop policies.
+
 ## v1.0.3
 
 - The Bash shim now resolves WSL Linux-home scripts through `wslpath` when dispatching to Windows PowerShell, while native `pwsh` keeps native paths.

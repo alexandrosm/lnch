@@ -1,0 +1,1068 @@
+{
+  "schema": 1,
+  "reviewedAt": "2026-08-26",
+  "purpose": "Discovery metadata for safe agent-to-agent migration planning. This file describes where agents keep state; it does not authorize copying every artifact.",
+  "transferPolicies": {
+    "native": "Prefer the source or target agent's supported import/export command.",
+    "translate": "Read the source artifact and convert its semantics into a versioned canonical model.",
+    "project-shared": "Keep the artifact in the project and reference it; do not duplicate it into another private store.",
+    "read-only-index": "Use only to discover or validate canonical artifacts. Never transplant or mutate it.",
+    "evidence": "Preserve only as optional filesystem or Git evidence, separate from conversational history.",
+    "rebuild": "Do not migrate. Let the target agent regenerate it.",
+    "exclude": "Never include in a migration bundle. Re-authenticate or reconfigure explicitly."
+  },
+  "invariants": [
+    "Never copy API keys, OAuth tokens, refresh tokens, credential databases, keychains, .env contents, or secret-placeholder keys.",
+    "Treat every transcript, prompt-history file, tool result, attachment, memory, and checkpoint as potentially secret-bearing.",
+    "Never write directly into another agent's private session store or mutable index.",
+    "Read SQLite through a consistent read-only snapshot or backup while the owning agent is closed; do not copy live WAL sets piecemeal.",
+    "Use indexes only to locate canonical transcript files; a stale or missing index must not erase discoverable transcripts.",
+    "Translate approval, sandbox, hook, MCP, and provider settings semantically. Never copy a permissive source setting blindly.",
+    "Start the target as a fresh session unless its documented importer creates a valid target-native session.",
+    "Emit provenance and an explicit loss report for every translated session."
+  ],
+  "knownGaps": [
+    "Only OMP, Claude Code, and Codex were installed locally during this review; Gemini CLI, Aider, OpenCode, and Qwen Code were mapped from current official documentation and upstream source.",
+    "Private formats and versioned SQLite schemas can change without compatibility guarantees. Adapter selection must be version-gated and fixture-tested.",
+    "Provider-encrypted reasoning, signatures, prompt-cache identifiers, and account-affinity metadata are not portable. Preserve only opaque provenance when safe; never replay them as target credentials.",
+    "Tool names, argument schemas, result envelopes, and call IDs differ. Unknown tools require a loss entry and a bounded textual representation.",
+    "Encoded project paths and recorded cwd values are machine-specific. Migration needs explicit path rebasing and must never infer trust from the source machine.",
+    "Attachments, blob payloads, tool-result spills, and checkpoints may already be absent because of retention cleanup. Missing referenced data must be reported, not silently dropped.",
+    "OMP and Codex foreign importers are one-way and intentionally selective. Their exact fidelity still needs golden cross-version fixtures.",
+    "Aider's restorable Markdown history omits structured tool semantics and drops quoted tool-role messages by default.",
+    "OpenCode's current SQLite database mixes portable conversation rows with credential and account tables. Prefer its native export command.",
+    "Imported hooks, plugins, commands, skills, MCP servers, and permission rules can execute code or widen access; require item-level review before activation."
+  ],
+  "agents": {
+    "omp": {
+      "displayName": "Oh My Pi",
+      "verification": {
+        "mode": "installed-and-upstream-source",
+        "version": "18.0.6"
+      },
+      "roots": [
+        {
+          "id": "user",
+          "default": "~/.omp/agent",
+          "overrides": [
+            "PI_CODING_AGENT_DIR",
+            "OMP_PROFILE -> ~/.omp/profiles/<profile>/agent",
+            "existing XDG_DATA_HOME/XDG_STATE_HOME/XDG_CACHE_HOME omp roots"
+          ]
+        },
+        {
+          "id": "project",
+          "default": "<project>/.omp"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "global-settings",
+          "paths": ["<user>/config.yml", "<user>/config.yaml", "<user>/settings.json.bak"],
+          "scope": "user",
+          "format": "yaml-or-legacy-json",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented",
+          "notes": "Allowlist non-secret settings. settings.json is legacy after migration."
+        },
+        {
+          "id": "project-settings",
+          "paths": ["<project>/.omp/config.yml", "<project>/.omp/settings.json"],
+          "scope": "project",
+          "format": "yaml-or-json",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "instructions-and-extensions",
+          "paths": ["<user>/{SYSTEM.md,RULES.md,AGENTS.md,skills/,rules/,commands/,hooks/,tools/,extensions/,mcp.json}", "<project>/.omp/{SYSTEM.md,RULES.md,AGENTS.md,skills/,rules/,commands/,hooks/,tools/,extensions/,mcp.json}"],
+          "scope": "user-and-project",
+          "format": "markdown-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "sessions",
+          "paths": ["<user>/sessions/<encoded-cwd>/<timestamp>_<session-id>.jsonl", "<user>/sessions/<encoded-cwd>/<session-stem>/<subagent-id>.jsonl"],
+          "scope": "session",
+          "format": "versioned-jsonl-tree",
+          "kind": "canonical-transcript",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "Fixed-width title slot, session header, then id/parentId entries. Includes messages, tool calls/results, model changes, compaction, resets, todos, and custom lifecycle records."
+        },
+        {
+          "id": "blobs",
+          "paths": ["<user>/blobs/<sha256>"],
+          "scope": "session",
+          "format": "content-addressed-binary",
+          "kind": "transcript-payload",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "Resolve only blobs referenced by selected transcript entries."
+        },
+        {
+          "id": "thread-index",
+          "paths": ["<user>/agent.db"],
+          "scope": "user",
+          "format": "sqlite",
+          "kind": "session-index-and-runtime-state",
+          "transfer": "read-only-index",
+          "sensitivity": "secret",
+          "stability": "internal",
+          "notes": "threads maps session IDs to rollout paths and cwd. The same database contains auth credential tables; never copy the database."
+        },
+        {
+          "id": "prompt-history",
+          "paths": ["<user>/history.db"],
+          "scope": "user",
+          "format": "sqlite",
+          "kind": "prompt-history-and-titles",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "internal"
+        },
+        {
+          "id": "memory",
+          "paths": ["<user>/memories/", "<user>/memory/", "<project>/.omp/memory/"],
+          "scope": "user-and-project",
+          "format": "markdown-and-backend-specific",
+          "kind": "durable-memory",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "Backend may be off, local files, Mnemopi SQLite, or remote Hindsight."
+        },
+        {
+          "id": "terminal-breadcrumbs",
+          "paths": ["<user>/terminal-sessions/<terminal-id>"],
+          "scope": "runtime",
+          "format": "text",
+          "kind": "resume-pointer",
+          "transfer": "rebuild",
+          "sensitivity": "private",
+          "stability": "documented"
+        },
+        {
+          "id": "credentials-and-secrets",
+          "paths": ["<user>/agent.db::auth_*", "<user>/secrets.yml", "<project>/.omp/secrets.yml", "<user>/secret-placeholder.key"],
+          "scope": "user-and-project",
+          "format": "sqlite-yaml-key",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented"
+        },
+        {
+          "id": "logs-caches-and-model-indexes",
+          "paths": ["~/.omp/logs/", "<user>/cache/", "<user>/models.db"],
+          "scope": "user",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "internal"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["omp --continue", "omp --resume [id|path]", "omp --fork <id|path>"],
+        "nativeImports": [
+          {
+            "from": "claude",
+            "commands": ["omp --from-claude", "/resume @claude"],
+            "fidelity": "Preserves main-chain user/assistant text, images, thinking with signatures, tool calls/results, timestamps, parent tree, model changes, and title. Drops meta and sidechain records."
+          },
+          {
+            "from": "codex",
+            "commands": ["omp --from-codex", "/resume @codex"],
+            "fidelity": "Preserves supported messages, reasoning, function/custom/MCP/web tool calls and results, model changes, rollback effects, titles, and Codex remote compaction state."
+          }
+        ],
+        "nativeExports": ["/export produces HTML", "/dump produces display text and a best-effort JSON sidecar"],
+        "preferredSource": "Read raw OMP JSONL plus referenced blobs for machine migration; HTML is presentation-only."
+      },
+      "evidence": [
+        "https://github.com/can1357/oh-my-pi/blob/main/docs/session.md",
+        "https://github.com/can1357/oh-my-pi/blob/main/docs/config-usage.md",
+        "https://github.com/can1357/oh-my-pi/blob/main/docs/session-operations-export-share-fork-resume.md",
+        "https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/claude-session-store.ts",
+        "https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/codex-session-store.ts"
+      ]
+    },
+    "claude": {
+      "displayName": "Claude Code",
+      "verification": {
+        "mode": "installed-and-official-docs",
+        "version": "2.1.214"
+      },
+      "roots": [
+        {
+          "id": "user",
+          "default": "~/.claude",
+          "overrides": ["CLAUDE_CONFIG_DIR"]
+        },
+        {
+          "id": "project",
+          "default": "<project>/.claude"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["<user>/settings.json", "<project>/.claude/settings.json", "<project>/.claude/settings.local.json", "managed-settings.json"],
+          "scope": "managed-user-project-local",
+          "format": "json",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented",
+          "notes": "Translate permissions, hooks, model, plugins, and env references. Do not copy embedded secrets or permissive approvals blindly."
+        },
+        {
+          "id": "global-app-state",
+          "paths": ["~/.claude.json", "<user>/backups/.claude.json.backup.*"],
+          "scope": "user",
+          "format": "json",
+          "kind": "app-state-auth-mcp-trust",
+          "transfer": "translate",
+          "sensitivity": "secret",
+          "stability": "documented",
+          "notes": "Field-allowlist only: project trust and MCP definitions may be translated; OAuth/account fields and backups are excluded."
+        },
+        {
+          "id": "instructions-and-capabilities",
+          "paths": ["~/.claude/{CLAUDE.md,rules/,skills/,agents/,commands/,hooks/,plugins/}", "<project>/{CLAUDE.md,.mcp.json,.claude/CLAUDE.md,.claude/rules/,.claude/skills/,.claude/agents/,.claude/commands/,.claude/hooks/}"],
+          "scope": "user-and-project",
+          "format": "markdown-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "sessions",
+          "paths": ["<user>/projects/<encoded-project>/<session-id>.jsonl"],
+          "scope": "session",
+          "format": "jsonl-tree",
+          "kind": "canonical-transcript",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "Records include uuid/parentUuid, sessionId, cwd, user/assistant/system types, Anthropic message blocks, tool results, titles, snapshots, queue operations, and attachments."
+        },
+        {
+          "id": "subagent-and-workflow-sessions",
+          "paths": ["<user>/projects/<encoded-project>/<session-id>/subagents/*.jsonl", "<user>/projects/<encoded-project>/<session-id>/workflows/*/*.jsonl", "<user>/projects/<encoded-project>/<session-id>/workflows/*/journal.jsonl"],
+          "scope": "session",
+          "format": "jsonl",
+          "kind": "child-transcripts",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "tool-result-spills-and-attachments",
+          "paths": ["<user>/projects/<encoded-project>/<session-id>/tool-results/", "<user>/paste-cache/", "<user>/uploads/<session-id>/"],
+          "scope": "session",
+          "format": "mixed",
+          "kind": "transcript-payload",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "Include only files referenced by a selected transcript and only with explicit user consent."
+        },
+        {
+          "id": "prompt-history",
+          "paths": ["<user>/history.jsonl"],
+          "scope": "user",
+          "format": "jsonl",
+          "kind": "prompt-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "checkpoint-file-history",
+          "paths": ["<user>/file-history/<session-id>/"],
+          "scope": "session",
+          "format": "versioned-file-snapshots",
+          "kind": "filesystem-checkpoint",
+          "transfer": "evidence",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "tasks",
+          "paths": ["<user>/tasks/<session-id>/*.json"],
+          "scope": "session",
+          "format": "json",
+          "kind": "task-state",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "auto-memory",
+          "paths": ["<user>/projects/<encoded-project>/memory/", "~/.claude/agent-memory/", "<project>/.claude/agent-memory/", "<project>/.claude/agent-memory-local/"],
+          "scope": "user-project-agent",
+          "format": "markdown",
+          "kind": "durable-memory",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "credentials",
+          "paths": ["<user>/.credentials.json", "~/.claude.json::oauthAccount", "OS credential store"],
+          "scope": "user",
+          "format": "json-or-keychain",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented-and-observed"
+        },
+        {
+          "id": "runtime-markers-and-shell-state",
+          "paths": ["<user>/sessions/", "<user>/session-env/", "<user>/shell-snapshots/"],
+          "scope": "runtime",
+          "format": "mixed",
+          "kind": "ephemeral-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "logs-caches-telemetry",
+          "paths": ["<user>/debug/", "<user>/daemon/", "<user>/telemetry/", "<user>/cache/", "<user>/usage-data/"],
+          "scope": "user",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["claude --continue", "claude --resume [session-id]"],
+        "nativeImports": [],
+        "nativeExports": [],
+        "knownConsumers": ["OMP --from-claude", "Codex /import"],
+        "preferredSource": "Project JSONL plus referenced child transcripts, tool-result spills, and attachments."
+      },
+      "evidence": [
+        "https://code.claude.com/docs/en/claude-directory",
+        "https://code.claude.com/docs/en/settings",
+        "https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/claude-session-store.ts",
+        "https://github.com/openai/codex/blob/main/codex-rs/external-agent-migration/src/sessions/records_cla.rs"
+      ]
+    },
+    "codex": {
+      "displayName": "OpenAI Codex CLI",
+      "verification": {
+        "mode": "installed-official-docs-and-upstream-source",
+        "version": "0.147.0"
+      },
+      "roots": [
+        {
+          "id": "user",
+          "default": "~/.codex",
+          "overrides": ["CODEX_HOME"]
+        },
+        {
+          "id": "project",
+          "default": "<project>/.codex"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["<user>/config.toml", "<user>/<profile>.config.toml", "<project>/.codex/config.toml", "/etc/codex/config.toml", "requirements.toml"],
+          "scope": "managed-user-profile-project",
+          "format": "toml",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "instructions-and-capabilities",
+          "paths": ["<project>/AGENTS.md", "<user>/{hooks.json,rules/,skills/,plugins/}", "<project>/.codex/{hooks.json,rules/,skills/,plugins/}"],
+          "scope": "user-and-project",
+          "format": "markdown-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "rollouts",
+          "paths": ["<user>/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl", "<user>/archived_sessions/**/*.jsonl", "<user>/.sessions/**/*.jsonl"],
+          "scope": "session",
+          "format": "jsonl-event-log",
+          "kind": "canonical-transcript",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "source-verified",
+          "notes": "session_meta plus turn_context, response_item, event_msg, compacted, world-state, and multi-agent records."
+        },
+        {
+          "id": "thread-index",
+          "paths": ["<user>/state_*.sqlite", "<user>/session_index.jsonl"],
+          "scope": "user",
+          "format": "sqlite-or-legacy-jsonl",
+          "kind": "session-index-and-runtime-state",
+          "transfer": "read-only-index",
+          "sensitivity": "confidential",
+          "stability": "versioned-internal",
+          "notes": "Use the highest state_N.sqlite. threads maps IDs to rollout_path and includes cwd, title, model, Git metadata, hierarchy, archival, and preview fields."
+        },
+        {
+          "id": "thread-history-projection",
+          "paths": ["<user>/thread_history_*.sqlite"],
+          "scope": "user",
+          "format": "sqlite",
+          "kind": "message-turn-projection",
+          "transfer": "read-only-index",
+          "sensitivity": "confidential",
+          "stability": "versioned-internal",
+          "notes": "thread_items stores item_json; canonical source remains rollout JSONL."
+        },
+        {
+          "id": "prompt-history",
+          "paths": ["<user>/history.jsonl"],
+          "scope": "user",
+          "format": "jsonl",
+          "kind": "prompt-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "goals",
+          "paths": ["<user>/goals_*.sqlite"],
+          "scope": "session",
+          "format": "sqlite",
+          "kind": "goal-state",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "versioned-internal"
+        },
+        {
+          "id": "memory",
+          "paths": ["<user>/memories/", "<user>/memories_*.sqlite"],
+          "scope": "user-and-session",
+          "format": "generated-files-and-sqlite",
+          "kind": "durable-memory",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented-and-versioned-internal"
+        },
+        {
+          "id": "credentials",
+          "paths": ["<user>/auth.json", "OS keychain/keyring"],
+          "scope": "user",
+          "format": "json-or-keychain",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented"
+        },
+        {
+          "id": "sandbox-secrets",
+          "paths": ["<user>/.sandbox-secrets/", "<user>/mcp-oauth-locks/"],
+          "scope": "runtime",
+          "format": "mixed",
+          "kind": "credentials-and-locks",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "internal"
+        },
+        {
+          "id": "logs-caches-models",
+          "paths": ["<user>/log/", "<user>/logs_*.sqlite", "<user>/models_cache.json", "<user>/cache/", "<user>/sandbox*.log"],
+          "scope": "user",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "internal"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["codex resume", "codex resume --last"],
+        "nativeImports": [
+          {
+            "from": "claude",
+            "command": "/import",
+            "scope": "Instructions, settings, skills, plugins, projects, project memories, MCP, hooks, slash commands, subagents, and up to 50 chats from the last 30 days.",
+            "fidelity": "Claude chat records are flattened to user/assistant text. Thinking is dropped; tool calls/results become bounded tagged text notes. Source files remain unchanged."
+          },
+          {
+            "from": "cursor",
+            "command": "/import"
+          }
+        ],
+        "nativeExports": [],
+        "knownConsumers": ["OMP --from-codex"],
+        "preferredSource": "Rollout JSONL located through the newest read-only state_N.sqlite index."
+      },
+      "evidence": [
+        "https://learn.chatgpt.com/docs/config-file/config-advanced",
+        "https://learn.chatgpt.com/docs/auth",
+        "https://learn.chatgpt.com/docs/import",
+        "https://github.com/openai/codex/tree/main/codex-rs/state",
+        "https://github.com/openai/codex/tree/main/codex-rs/external-agent-migration",
+        "https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/codex-session-store.ts"
+      ]
+    },
+    "gemini": {
+      "displayName": "Gemini CLI",
+      "verification": {
+        "mode": "official-docs-and-upstream-source",
+        "version": null,
+        "installed": false
+      },
+      "roots": [
+        {
+          "id": "user",
+          "default": "~/.gemini",
+          "overrides": ["GEMINI_CLI_HOME -> <value>/.gemini"]
+        },
+        {
+          "id": "project",
+          "default": "<project>/.gemini"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["<user>/settings.json", "<project>/.gemini/settings.json", "/etc/gemini-cli/{system-defaults.json,settings.json}", "%ProgramData%/gemini-cli/{system-defaults.json,settings.json}"],
+          "scope": "system-user-project",
+          "format": "json",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "instructions-and-capabilities",
+          "paths": ["<user>/{GEMINI.md,commands/,skills/,agents/,policies/,extensions/}", "<project>/{GEMINI.md,.gemini/commands/,.gemini/skills/,.gemini/agents/,.gemini/policies/,.gemini/extensions/}"],
+          "scope": "user-and-project",
+          "format": "markdown-toml-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "sessions",
+          "paths": ["<user>/tmp/<project-hash>/chats/session-<timestamp>-<session-prefix>.jsonl", "<user>/tmp/<project-hash>/chats/<parent-session>/<subagent-id>.jsonl", "<user>/tmp/<project-hash>/chats/*.json"],
+          "scope": "session",
+          "format": "jsonl-with-legacy-json",
+          "kind": "canonical-transcript",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented-and-source-verified",
+          "notes": "Metadata record plus append-only messages, $set metadata updates, and rewind records. Messages retain content, tool calls/results, thoughts, token usage, model, summary, directories, and memory scratchpad."
+        },
+        {
+          "id": "checkpoint-git",
+          "paths": ["<user>/history/<project-hash>/"],
+          "scope": "project",
+          "format": "shadow-git-repository",
+          "kind": "filesystem-checkpoint",
+          "transfer": "evidence",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "checkpoint-metadata",
+          "paths": ["<user>/tmp/<project-hash>/checkpoints/"],
+          "scope": "session",
+          "format": "json",
+          "kind": "conversation-and-tool-checkpoint",
+          "transfer": "evidence",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "memory",
+          "paths": ["<user>/tmp/<project-hash>/memory/", "<user>/GEMINI.md", "<project>/GEMINI.md"],
+          "scope": "user-and-project",
+          "format": "markdown-patches-and-state",
+          "kind": "durable-memory",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "trust",
+          "paths": ["<user>/trustedFolders.json"],
+          "scope": "user",
+          "format": "json",
+          "kind": "project-trust",
+          "transfer": "translate",
+          "sensitivity": "private",
+          "stability": "documented",
+          "notes": "Never grant target trust automatically; use only as a review hint."
+        },
+        {
+          "id": "session-artifacts",
+          "paths": ["<user>/tmp/<project-hash>/<session-id>/{plans/,tracker/,tasks/}", "<user>/tmp/<project-hash>/tool-results/", "<user>/tmp/<project-hash>/shell_history"],
+          "scope": "session",
+          "format": "mixed",
+          "kind": "plans-tasks-tool-results-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "source-verified"
+        },
+        {
+          "id": "credentials",
+          "paths": ["<user>/oauth_creds.json", "<user>/gemini-credentials.json", "<user>/google_accounts.json", "<user>/mcp-oauth-tokens.json", "<user>/a2a-oauth-tokens.json", "OS keychain"],
+          "scope": "user",
+          "format": "json-encrypted-file-or-keychain",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "source-verified"
+        },
+        {
+          "id": "browser-profile",
+          "paths": ["<user>/cli-browser-profile/"],
+          "scope": "user",
+          "format": "chromium-profile",
+          "kind": "browser-state",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented"
+        },
+        {
+          "id": "logs-caches-runtime",
+          "paths": ["<user>/tmp/<project-hash>/logs/", "<user>/tmp/<project-hash>/otel/", "<user>/cache/"],
+          "scope": "user-and-project",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["gemini --resume [index|session-id]", "gemini --list-sessions", "/resume"],
+        "nativeImports": [],
+        "nativeExports": [],
+        "preferredSource": "Session JSONL from the current project's hashed chats directory."
+      },
+      "evidence": [
+        "https://geminicli.com/docs/reference/configuration.md",
+        "https://geminicli.com/docs/cli/session-management.md",
+        "https://geminicli.com/docs/cli/checkpointing.md",
+        "https://geminicli.com/docs/cli/auto-memory.md",
+        "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingTypes.ts",
+        "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/config/storage.ts"
+      ]
+    },
+    "aider": {
+      "displayName": "Aider",
+      "verification": {
+        "mode": "official-docs-and-upstream-source",
+        "version": null,
+        "installed": false
+      },
+      "roots": [
+        {
+          "id": "layered-config",
+          "default": "home -> git-root -> cwd",
+          "overrides": ["--config <file>"]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["~/.aider.conf.yml", "<git-root>/.aider.conf.yml", "<cwd>/.aider.conf.yml"],
+          "scope": "user-and-project",
+          "format": "yaml",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "secret",
+          "stability": "documented",
+          "notes": "May contain OpenAI, Anthropic, or generic provider API keys. Parse with a strict secret-field denylist."
+        },
+        {
+          "id": "provider-environment",
+          "paths": ["<cwd>/.env", "<git-root>/.env", "~/.env"],
+          "scope": "user-and-project",
+          "format": "dotenv",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented"
+        },
+        {
+          "id": "chat-history",
+          "paths": ["<cwd>/.aider.chat.history.md", "<configured-chat-history-file>"],
+          "scope": "launch-directory",
+          "format": "markdown-transcript",
+          "kind": "canonical-restorable-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented",
+          "notes": "User turns begin with ####; assistant text follows. Quoted tool output is omitted by Aider's default restore parser, so this is lower fidelity than structured agent logs."
+        },
+        {
+          "id": "input-history",
+          "paths": ["<cwd>/.aider.input.history", "<configured-input-history-file>"],
+          "scope": "launch-directory",
+          "format": "prompt-toolkit-history",
+          "kind": "prompt-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "llm-history",
+          "paths": ["<configured-llm-history-file>"],
+          "scope": "session",
+          "format": "timestamped-text",
+          "kind": "optional-raw-model-history",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "model-settings",
+          "paths": ["~/.aider.model.settings.yml", "<git-root>/.aider.model.settings.yml", "<cwd>/.aider.model.settings.yml", "~/.aider.model.metadata.json", "<git-root>/.aider.model.metadata.json", "<cwd>/.aider.model.metadata.json"],
+          "scope": "user-and-project",
+          "format": "yaml-and-json",
+          "kind": "model-configuration",
+          "transfer": "translate",
+          "sensitivity": "configuration",
+          "stability": "documented"
+        },
+        {
+          "id": "ignore",
+          "paths": ["<git-root>/.aiderignore"],
+          "scope": "project",
+          "format": "gitignore-patterns",
+          "kind": "file-policy",
+          "transfer": "translate",
+          "sensitivity": "configuration",
+          "stability": "documented"
+        },
+        {
+          "id": "repository-map-cache",
+          "paths": ["<git-root>/.aider.tags.cache.v3/", "<git-root>/.aider.tags.cache.v4/"],
+          "scope": "project",
+          "format": "diskcache-sqlite",
+          "kind": "derived-code-index",
+          "transfer": "rebuild",
+          "sensitivity": "private",
+          "stability": "internal-versioned"
+        },
+        {
+          "id": "analytics",
+          "paths": ["~/.aider/analytics.json"],
+          "scope": "user",
+          "format": "json",
+          "kind": "installation-telemetry-state",
+          "transfer": "rebuild",
+          "sensitivity": "private",
+          "stability": "source-verified"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["aider --restore-chat-history"],
+        "nativeImports": [],
+        "nativeExports": ["/save reconstructs current files, not a structured conversation export"],
+        "preferredSource": "Markdown chat history, optionally augmented by the explicitly configured LLM history file."
+      },
+      "evidence": [
+        "https://aider.chat/docs/config/aider_conf.html",
+        "https://aider.chat/docs/config/options.html",
+        "https://aider.chat/docs/config/api-keys.html",
+        "https://github.com/Aider-AI/aider/blob/main/aider/io.py",
+        "https://github.com/Aider-AI/aider/blob/main/aider/utils.py",
+        "https://github.com/Aider-AI/aider/blob/main/aider/repomap.py"
+      ]
+    },
+    "opencode": {
+      "displayName": "OpenCode",
+      "verification": {
+        "mode": "official-docs-and-upstream-source",
+        "version": null,
+        "installed": false
+      },
+      "roots": [
+        {
+          "id": "config",
+          "default": "$XDG_CONFIG_HOME/opencode (typically ~/.config/opencode)",
+          "overrides": ["OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"]
+        },
+        {
+          "id": "data",
+          "default": "$XDG_DATA_HOME/opencode (typically ~/.local/share/opencode)"
+        },
+        {
+          "id": "cache",
+          "default": "$XDG_CACHE_HOME/opencode (typically ~/.cache/opencode)"
+        },
+        {
+          "id": "state",
+          "default": "$XDG_STATE_HOME/opencode (typically ~/.local/state/opencode)"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["<config>/opencode.json", "<config>/opencode.jsonc", "<project>/opencode.json", "<project>/opencode.jsonc", "<config>/tui.json", "<project>/tui.json"],
+          "scope": "user-and-project",
+          "format": "json-or-jsonc",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "instructions-and-capabilities",
+          "paths": ["<config>/{agents/,commands/,plugins/,skills/,tools/,themes/}", "<project>/.opencode/{agents/,commands/,plugins/,skills/,tools/,themes/}", "<project>/{AGENTS.md,.claude/skills/,.agents/skills/}"],
+          "scope": "user-and-project",
+          "format": "markdown-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "database",
+          "paths": ["<data>/opencode.db", "<data>/opencode-<channel>.db"],
+          "scope": "user",
+          "format": "sqlite-wal",
+          "kind": "canonical-session-and-project-store",
+          "transfer": "read-only-index",
+          "sensitivity": "secret",
+          "stability": "source-verified",
+          "notes": "Current tables include project, workspace, session, message, part, todo, session input/context, permissions, shares, accounts, credentials, and events. Query only session/project/message/part/todo tables through a consistent snapshot; never copy the database."
+        },
+        {
+          "id": "legacy-json-storage",
+          "paths": ["<data>/storage/{project/,session/,message/,part/,todo/,session_diff/}"],
+          "scope": "user",
+          "format": "json-tree",
+          "kind": "legacy-session-store",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "legacy-source-verified"
+        },
+        {
+          "id": "snapshots",
+          "paths": ["<data>/snapshot/<project-id>/<worktree-hash>/"],
+          "scope": "project",
+          "format": "shadow-git-repository",
+          "kind": "filesystem-checkpoint",
+          "transfer": "evidence",
+          "sensitivity": "confidential",
+          "stability": "source-verified"
+        },
+        {
+          "id": "auth",
+          "paths": ["<data>/auth.json", "<database>::{control_account,credential}"],
+          "scope": "user",
+          "format": "json-and-sqlite",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented-and-source-verified"
+        },
+        {
+          "id": "logs-cache-and-repos",
+          "paths": ["<data>/log/", "<cache>/", "<data>/repos/"],
+          "scope": "user",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "source-verified"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["opencode --continue", "opencode --session <session-id>", "opencode --fork --session <session-id>"],
+        "nativeImports": [
+          {
+            "from": "opencode-json-or-share-url",
+            "command": "opencode import <file-or-share-url>",
+            "fidelity": "Native round trip of session info, messages, and parts. Imported sessions are rebound to the current project and directory."
+          }
+        ],
+        "nativeExports": ["opencode export [session-id]", "opencode export --sanitize [session-id]"],
+        "preferredSource": "Use native export for one session. Use a read-only SQLite snapshot only for bulk discovery or when native export is unavailable."
+      },
+      "evidence": [
+        "https://opencode.ai/docs/config/",
+        "https://opencode.ai/docs/cli/",
+        "https://github.com/anomalyco/opencode/blob/dev/packages/core/src/database/database.ts",
+        "https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/session.ts",
+        "https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/export.ts",
+        "https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/import.ts",
+        "https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/auth/index.ts"
+      ]
+    },
+    "qwen": {
+      "displayName": "Qwen Code",
+      "verification": {
+        "mode": "official-docs-and-upstream-source",
+        "version": null,
+        "installed": false
+      },
+      "roots": [
+        {
+          "id": "user",
+          "default": "~/.qwen",
+          "overrides": ["QWEN_HOME"]
+        },
+        {
+          "id": "runtime",
+          "default": "<user>",
+          "overrides": ["QWEN_RUNTIME_DIR", "settings runtime output directory"]
+        },
+        {
+          "id": "project",
+          "default": "<project>/.qwen"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "settings",
+          "paths": ["<user>/settings.json", "<project>/.qwen/settings.json", "/etc/qwen-code/{system-defaults.json,settings.json}", "%ProgramData%/qwen-code/{system-defaults.json,settings.json}"],
+          "scope": "system-user-project",
+          "format": "json",
+          "kind": "configuration",
+          "transfer": "translate",
+          "sensitivity": "secret",
+          "stability": "documented",
+          "notes": "The env field may contain plaintext API keys. Strip secrets before translating provider/model settings."
+        },
+        {
+          "id": "provider-environment",
+          "paths": ["<project>/.qwen/.env", "<project>/.env", "<user>/.env", "~/.env"],
+          "scope": "user-and-project",
+          "format": "dotenv",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented"
+        },
+        {
+          "id": "instructions-and-capabilities",
+          "paths": ["<user>/{QWEN.md,commands/,skills/,agents/,policies/,extensions/,workflows/}", "<project>/{QWEN.md,AGENTS.md,.qwen/QWEN.local.md,.qwen/commands/,.qwen/skills/,.qwen/agents/,.qwen/policies/,.qwen/extensions/,.qwen/workflows/}"],
+          "scope": "user-and-project",
+          "format": "markdown-json-code",
+          "kind": "instructions-and-capabilities",
+          "transfer": "translate",
+          "sensitivity": "mixed",
+          "stability": "documented"
+        },
+        {
+          "id": "sessions",
+          "paths": ["<runtime>/projects/<encoded-project>/chats/<session-id>.jsonl"],
+          "scope": "session",
+          "format": "jsonl-tree",
+          "kind": "canonical-transcript",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "source-verified",
+          "notes": "Append-only uuid/parentUuid records preserve user, assistant, tool result, system events, raw provider Content, usage, models, tool UI metadata, compression, titles, rewinds, branch lineage, subagents, goals, artifacts, and attribution."
+        },
+        {
+          "id": "session-runtime-status",
+          "paths": ["<runtime>/projects/<encoded-project>/chats/<session-id>.runtime.json"],
+          "scope": "runtime",
+          "format": "json",
+          "kind": "live-session-marker",
+          "transfer": "rebuild",
+          "sensitivity": "private",
+          "stability": "source-verified"
+        },
+        {
+          "id": "session-artifacts",
+          "paths": ["<runtime>/projects/<encoded-project>/workflows/", "<runtime>/tmp/<project-hash>/tool-results/", "<runtime>/tmp/<project-hash>/checkpoints/", "<user>/plans/", "<user>/file-history/<session-id>/"],
+          "scope": "session",
+          "format": "mixed",
+          "kind": "workflows-tool-results-plans-checkpoints",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented-and-source-verified"
+        },
+        {
+          "id": "checkpoint-git",
+          "paths": ["<user>/history/<project-hash>/"],
+          "scope": "project",
+          "format": "shadow-git-repository",
+          "kind": "filesystem-checkpoint",
+          "transfer": "evidence",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "memory",
+          "paths": ["<runtime>/projects/<encoded-project>/memory/", "<user>/memories/", "<user>/memory.md", "<project>/.qwen/team-memory/"],
+          "scope": "user-project-team",
+          "format": "markdown",
+          "kind": "durable-memory",
+          "transfer": "translate",
+          "sensitivity": "confidential",
+          "stability": "documented"
+        },
+        {
+          "id": "credentials",
+          "paths": ["<user>/oauth_creds.json", "<user>/mcp-oauth-tokens.json", "<user>/google_accounts.json", "<user>/settings.json::env", "OS environment"],
+          "scope": "user",
+          "format": "json-env",
+          "kind": "credentials",
+          "transfer": "exclude",
+          "sensitivity": "secret",
+          "stability": "documented-and-source-verified"
+        },
+        {
+          "id": "debug-cache-runtime",
+          "paths": ["<runtime>/debug/", "<runtime>/tmp/", "<user>/ide/", "<user>/bin/"],
+          "scope": "user-and-runtime",
+          "format": "mixed",
+          "kind": "derived-runtime-state",
+          "transfer": "rebuild",
+          "sensitivity": "mixed",
+          "stability": "source-verified"
+        }
+      ],
+      "sessionInterop": {
+        "resume": ["qwen --continue", "qwen --resume [session-id]", "/resume", "/branch"],
+        "nativeImports": [
+          {
+            "from": "claude-config",
+            "command": "/import-config claude-code",
+            "scope": "MCP configuration only; not conversation history."
+          }
+        ],
+        "nativeExports": ["/export json", "/export jsonl", "/export md", "/export html"],
+        "preferredSource": "Use the normalized JSON/JSONL exporter for portable messages and metadata; use raw session JSONL only when richer system-event fidelity is required.",
+        "exportSchema": "sessionId, startTime, metadata, and messages with uuid, parentUuid, timestamp, type, provider message content, model, usage, and normalized tool calls."
+      },
+      "evidence": [
+        "https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/",
+        "https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/",
+        "https://qwenlm.github.io/qwen-code-docs/en/users/features/memory/",
+        "https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/",
+        "https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/config/storage.ts",
+        "https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/services/chatRecordingService.ts",
+        "https://github.com/QwenLM/qwen-code/blob/main/packages/cli/src/ui/utils/export/types.ts"
+      ]
+    }
+  }
+}
