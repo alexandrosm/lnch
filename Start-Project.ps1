@@ -7,13 +7,15 @@
 #                              as the project's intent
 #   start <name> ... -Yolo     shorthand for the :yolo capability
 #
-#   CAPABILITY VERBS (leading :tokens - one vocabulary, every agent):
+#   CAPABILITY VERBS (may appear anywhere among the prompt words):
 #     :pick              resume, choosing among past sessions
 #     :plan :edits       approval ladder (where the agent supports it)
 #     :yolo              auto-approve everything
 #     :model <value>     pin the model for this session
-#   Verbs may appear anywhere among the prompt words. A verb an agent does not
-#   implement warns and is skipped - never a raw CLI error.
+#   A verb an agent does not implement warns and is skipped - never a raw CLI error.
+#
+#   New projects are seeded with AGENTS.md (+ CLAUDE.md/GEMINI.md pointers), and any
+#   postCreate commands from config.json run inside the fresh directory.
 #
 #   Reopening an existing project auto-resumes with the agent that last ran there:
 #   recorded in .ps-project.json ({agent,intent,created,updated}), falling back to
@@ -34,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.5.0'
+$script:StarterVersion = '0.5.1'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -142,12 +144,24 @@ function global:Get-StarterConfigPath {
     Join-Path $base 'project-starter'
 }
 
-function global:Get-StarterDefaultAgent {
+function global:Get-StarterUserConfig {
     $p = Join-Path (Get-StarterConfigPath) 'config.json'
     if (Test-Path -LiteralPath $p) {
-        try { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json).defaultAgent } catch { }
+        try { return Get-Content -LiteralPath $p -Raw | ConvertFrom-Json } catch { }
     }
     $null
+}
+
+function global:Get-StarterDefaultAgent {
+    $c = Get-StarterUserConfig
+    if ($c -and $c.defaultAgent) { return $c.defaultAgent }
+    $null
+}
+
+function global:Get-StarterPostCreateHooks {
+    $c = Get-StarterUserConfig
+    if ($c -and $c.postCreate) { return @($c.postCreate) }
+    @()
 }
 
 function global:Set-StarterDefaultAgent {
@@ -351,6 +365,8 @@ function global:start {
             $tag = if ($exe) { 'ok' } else { '--' }
             Write-Host ("[{0}] {1,-9} {2}" -f $tag, $a, ($cells -join ' '))
         }
+        $hooks = @(Get-StarterPostCreateHooks)
+        Write-Host ("[--] post-create hooks configured: {0}" -f $hooks.Count)
         $rootNow = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
         try { $rootNow = [System.IO.Path]::GetFullPath($rootNow) } catch { }
         $writable = $false
@@ -446,6 +462,41 @@ function global:start {
     if ($isNew) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Write-Host "created $dir"
+
+        # seed cross-harness instruction scaffolding (AGENTS.md standard)
+        $leafName = Split-Path -Path $dir -Leaf
+        $agentsMd = Join-Path $dir 'AGENTS.md'
+        $claudeMd = Join-Path $dir 'CLAUDE.md'
+        $geminiMd = Join-Path $dir 'GEMINI.md'
+        if (-not (Test-Path -LiteralPath $agentsMd)) {
+            $tpl = @(
+                ('# ' + $leafName),
+                '',
+                '## Overview',
+                '',
+                'Describe the project here.',
+                '',
+                '## Build & Test',
+                '',
+                '- Build:',
+                '- Test:',
+                '',
+                '## Code Style',
+                '',
+                '-',
+                '',
+                '## Security Notes',
+                '',
+                '-'
+            )
+            Set-Content -LiteralPath $agentsMd -Value $tpl -Encoding utf8
+        }
+        if (-not (Test-Path -LiteralPath $claudeMd)) {
+            Set-Content -LiteralPath $claudeMd -Value '@AGENTS.md' -Encoding utf8
+        }
+        if (-not (Test-Path -LiteralPath $geminiMd)) {
+            Set-Content -LiteralPath $geminiMd -Value 'Instructions live in AGENTS.md.' -Encoding utf8
+        }
     }
 
     if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
@@ -495,8 +546,15 @@ function global:start {
             }
         }
     }
-    $intentWords = @(($Prompt | Where-Object { $_ -notlike ':*' }) + ($verbs | ForEach-Object { ':' + $_.Name })) -join ' '
-    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($intentWords) { $intentWords } else { $null })
+    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
+
+    # --- post-create hooks (fresh projects only) ---------------------------
+    if ($isNew) {
+        foreach ($h in (Get-StarterPostCreateHooks)) {
+            Write-Host "post-create hook: $h"
+            try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
+        }
+    }
 
     # default: hand off to a fresh Windows Terminal tab
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
