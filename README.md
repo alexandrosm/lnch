@@ -8,7 +8,7 @@ One word from any shell to a running AI coding agent inside a fresh, git-initial
 start my-app build a snake game
 ```
 
-creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the current Windows Terminal window**, and launches your agent with `build a snake game` as its initial prompt.
+creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the current Windows Terminal window**, locks the tab title to the project name, and launches your agent with `build a snake game` as its initial prompt.
 
 ## Install
 

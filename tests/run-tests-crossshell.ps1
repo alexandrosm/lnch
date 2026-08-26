@@ -137,7 +137,7 @@ try {
 
     Write-Host '=== F: tab handoff reaches wt stub ==='
     $out = BashRun 'start kappa go'
-    Check F-handoff (($out -match 'WT-STUB -w 0 new-tab') -and ($out -match 'Start-InTab\.ps1'))
+    Check F-handoff (($out -match 'WT-STUB -w 0 new-tab --title kappa --suppressApplicationTitle') -and ($out -match 'Start-InTab\.ps1'))
 
     Write-Host '=== CMD: AutoRun lifecycle + start-cli.cmd ==='
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Starter 'install-cmd.ps1') | Out-Null

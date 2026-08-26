@@ -36,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.5.3'
+$script:StarterVersion = '0.5.4'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -591,7 +591,8 @@ function global:start {
         $sh = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
         $shellExe = if ($sh) { $sh.Source } else { Join-Path $PSHOME 'powershell.exe' }
         $launcher = Join-Path $script:StarterRoot 'Start-InTab.ps1'
-        & $wt.Source -w 0 new-tab --title (Split-Path -Path $dir -Leaf) -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
+        $tabTitle = Split-Path -Path $dir -Leaf
+        & $wt.Source -w 0 new-tab --title $tabTitle --suppressApplicationTitle -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
         if ($LASTEXITCODE -eq 0) {
             Write-Host "-> $(Split-Path -Path $dir -Leaf) opened in a new terminal tab"
             return

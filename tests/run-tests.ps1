@@ -83,7 +83,7 @@ try {
     Write-Host '=== F: new-tab handoff env contract ==='
     $out = & $__startFn epsilon hi there
     $j = $out -join ' '
-    Check 'F same-window tab' ($j -match 'WT-STUB -w 0 new-tab .*Start-InTab\.ps1')
+    Check 'F sticky project title' ($j -match 'WT-STUB -w 0 new-tab --title epsilon --suppressApplicationTitle .*Start-InTab\.ps1')
     Check 'F name'            ($env:OMP_START_NAME -eq 'epsilon')
     Check 'F prompt'          ($env:OMP_START_PROMPT -eq 'hi there')
     Check 'F fresh env'       ($env:OMP_START_FRESH -eq '1')
@@ -120,7 +120,7 @@ try {
     Write-Host '=== K: yolo rides the tab handoff ==='
     $out = & $__startFn kappa go -yolo
     $j = $out -join ' '
-    Check 'K handed off'   ($j -match 'WT-STUB -w 0 new-tab')
+    Check 'K handed off'   ($j -match 'WT-STUB -w 0 new-tab --title kappa --suppressApplicationTitle')
     Check 'K env yolo'     ($env:OMP_START_YOLO -eq '1')
     Check 'K env agent'    ($env:OMP_START_AGENT -eq 'omp')
     Check 'K env fresh'    ($env:OMP_START_FRESH -eq '1')

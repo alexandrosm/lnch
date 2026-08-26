@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.4
+
+- Windows Terminal tab titles are locked to the project folder name with `--title <project> --suppressApplicationTitle`, preventing shells/agents from overwriting them.
+
 ## v0.5.3
 
 - Default project root is now `<current working directory>\projects` at invocation time; `OMP_PROJECTS_DIR` remains the explicit override.
