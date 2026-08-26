@@ -12,18 +12,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Package tagged tree
+      - name: Package tagged tree (git archive)
         shell: pwsh
         run: |
           $tag = ${env:GITHUB_REF_NAME}
-          $stage = "project-starter-$tag"
-          New-Item -ItemType Directory -Force -Path "staging/$stage" | Out-Null
-          Copy-Item -Path ./* -Destination "staging/$stage" -Recurse -Force
-          Remove-Item "staging/$stage/.git" -Recurse -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path "staging/$stage" -DestinationPath "project-starter-$tag.zip" -Force
+          git archive --format=zip "--output=project-starter-$tag.zip" $tag
           $hash = (Get-FileHash "project-starter-$tag.zip" -Algorithm SHA256).Hash
           "$hash  project-starter-$tag.zip" | Set-Content SHA256SUMS
+          Get-ChildItem project-starter-*.zip, SHA256SUMS | Format-Table Name, Length
 
       - name: Create release with assets
         shell: pwsh
