@@ -1,7 +1,7 @@
 # lnch for bash/zsh: thin shim into the PowerShell engine.
 # Sourced by install.sh into your rc file. Flags: --yolo, --here.
-# Dependency-free POSIX->Windows path conversion (/mnt/c, /c, and native
-# Windows forms; tr-based, no cygpath).
+# Converts MSYS and WSL paths only when dispatching to Windows PowerShell.
+# WSL uses wslpath for Linux-home UNC paths; Git Bash needs no cygpath.
 
 if [ -n "${BASH_SOURCE:-}" ]; then
     __LNCH_SRC="${BASH_SOURCE[0]}"
@@ -14,6 +14,10 @@ __LNCH_DIR="$(cd "$(dirname "$__LNCH_SRC")/.." && pwd)"
 
 ps_win_path() {
     local p="$1"
+    if command -v wslpath >/dev/null 2>&1; then
+        wslpath -w "$p"
+        return
+    fi
     case "$p" in
         /mnt/[a-zA-Z]/*)
             printf '%s%s' \
@@ -33,16 +37,22 @@ ps_win_path() {
 
 lnch() {
     local exe entry
-    if command -v pwsh.exe >/dev/null 2>&1; then
-        exe="pwsh.exe"
-    elif command -v pwsh >/dev/null 2>&1; then
-        exe="pwsh"
+    if command -v pwsh >/dev/null 2>&1; then
+        exe="$(command -v pwsh)"
+    elif command -v pwsh.exe >/dev/null 2>&1; then
+        exe="$(command -v pwsh.exe)"
+    elif command -v powershell >/dev/null 2>&1; then
+        exe="$(command -v powershell)"
     elif command -v powershell.exe >/dev/null 2>&1; then
-        exe="powershell.exe"
+        exe="$(command -v powershell.exe)"
     else
-        exe="powershell"
+        printf '%s\n' 'lnch: PowerShell is required (pwsh or powershell.exe)' >&2
+        return 127
     fi
-    entry="$(ps_win_path "$__LNCH_DIR/entry.ps1")"
-    # MSYS2_ARG_CONV_EXCL/MSYS_NO_PATHCONV stop git-bash mangling args like foo/bar
+    case "$exe" in
+        *.exe|/[a-zA-Z]/*) entry="$(ps_win_path "$__LNCH_DIR/entry.ps1")" ;;
+        *) entry="$__LNCH_DIR/entry.ps1" ;;
+    esac
+    # Stop MSYS2 from converting prompt arguments such as foo/bar.
     MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$exe" -NoProfile -ExecutionPolicy Bypass -File "$entry" "$@"
 }

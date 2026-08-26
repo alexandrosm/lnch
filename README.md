@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.0.2   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.0.3   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:

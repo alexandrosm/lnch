@@ -1,6 +1,6 @@
 # lnch remote bootstrap for PowerShell / cmd boxes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <this-url> | iex"
-# Optional: -Version v1.0.0 pins a tagged release (default: latest release,
+# Optional: -Version vX.Y.Z pins a tagged release (default: latest release,
 # falling back to the main branch when the API is unreachable).
 # Tagged downloads are SHA256-verified against the release's SHA256SUMS.
 param([string]$Version = '')

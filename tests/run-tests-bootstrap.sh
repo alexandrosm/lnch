@@ -53,4 +53,12 @@ test -f "$WORK/home/.lnch/shell/lnch.sh"
 test ! -e "$WORK/run/.github"
 HOME="$WORK/home" bash -c 'source "$HOME/.bashrc"; declare -F lnch >/dev/null'
 
+cat > "$WORK/bin/wslpath" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' '\\wsl.localhost\Ubuntu\home\hero\.lnch\entry.ps1'
+STUB
+chmod +x "$WORK/bin/wslpath"
+PATH="$WORK/bin:$PATH" LNCH_SH="$ROOT/shell/lnch.sh" bash -c \
+    '. "$LNCH_SH"; test "$(ps_win_path /home/hero/.lnch/entry.ps1)" = "\\\\wsl.localhost\\Ubuntu\\home\\hero\\.lnch\\entry.ps1"'
+
 echo 'RESULT: BASH BOOTSTRAP PASS'

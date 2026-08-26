@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lnch remote bootstrap for bash/zsh boxes:
 #   curl -fsSL https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.sh | bash
-# Optional: ./bootstrap.sh v1.0.0 pins a tagged release (default: latest release,
+# Optional: ./bootstrap.sh vX.Y.Z pins a tagged release (default: latest release,
 # falling back to the main branch when the API is unreachable). Tagged downloads
 # are SHA256-verified against the release's SHA256SUMS.
 set -e

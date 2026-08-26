@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.3
+
+- The Bash shim now resolves WSL Linux-home scripts through `wslpath` when dispatching to Windows PowerShell, while native `pwsh` keeps native paths.
+- Cross-shell tests source the production shim instead of maintaining a duplicate implementation.
+
 ## v1.0.2
 
 - Tagged Bash installs extract from a private temporary directory, so they work from any current directory and match the release archive's root layout.
