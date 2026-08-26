@@ -1,6 +1,6 @@
 @echo off
-rem project-starter cmd shim: forwards to the PowerShell engine.
-rem Target of the `start` doskey macro created by install-cmd.ps1.
+rem lnch cmd shim: forwards to the PowerShell engine.
+rem Target of the `lnch` doskey macro created by install-cmd.ps1.
 rem Resolves PowerShell by absolute existence check - immune to broken PATH.
 setlocal
 set "SCRIPT_DIR=%~dp0"

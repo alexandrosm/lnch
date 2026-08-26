@@ -1,4 +1,4 @@
-# Reproducible local release packaging for project-starter.
+# Reproducible local release packaging for lnch.
 # Usage: ./scripts/release-local.ps1 -Tag v0.5.2
 # Order matters: the TAG must exist before git archive can read it.
 # Uses raw .NET SHA256 - no cmdlet availability required.
@@ -16,7 +16,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Output ("created tag {0}" -f $Tag)
 }
 
-$zipPath = Join-Path $repoRoot "project-starter-$Tag.zip"
+$zipPath = Join-Path $repoRoot "lnch-$Tag.zip"
 git archive --format=zip "--output=$zipPath" $Tag
 
 $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -31,13 +31,13 @@ try {
     $sha.Dispose()
 }
 $hash = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
-"$hash  project-starter-$Tag.zip" | Set-Content SHA256SUMS
+"$hash  lnch-$Tag.zip" | Set-Content SHA256SUMS
 
 $size = (Get-Item $zipPath).Length
-Write-Output ("packaged project-starter-$Tag.zip ($size bytes)")
+Write-Output ("packaged lnch-$Tag.zip ($size bytes)")
 Write-Output ("sha256    = $hash")
 if ($size -lt 1000) { throw 'archive suspiciously small - refusing' }
 Write-Output 'publish:'
-Write-Output ("  gh release create {0} project-starter-{0}.zip SHA256SUMS --title {0} --generate-notes" -f $Tag)
+Write-Output ("  gh release create {0} lnch-{0}.zip SHA256SUMS --title {0} --generate-notes" -f $Tag)
 Write-Output 'replace existing assets:'
-Write-Output ("  gh release upload {0} project-starter-{0}.zip SHA256SUMS --clobber" -f $Tag)
+Write-Output ("  gh release upload {0} lnch-{0}.zip SHA256SUMS --clobber" -f $Tag)

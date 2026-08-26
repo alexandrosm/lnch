@@ -1,4 +1,4 @@
-__PROJECT_STARTER_DIR="$OMP_STARTER_DIR_WIN"
+__LNCH_DIR="$LNCH_INSTALL_DIR"
 ps_win_path() {
     local p="$1" drv="" rest=""
     case "$p" in
@@ -16,11 +16,11 @@ ps_win_path() {
         printf '%s' "${rest//\//\\}"
     fi
 }
-start() {
+lnch() {
     local exe entry
     if command -v pwsh.exe >/dev/null 2>&1; then exe="pwsh.exe"
     elif command -v powershell.exe >/dev/null 2>&1; then exe="powershell.exe"
     else exe="powershell"; fi
-    entry="$(ps_win_path "$__PROJECT_STARTER_DIR/entry.ps1")"
+    entry="$(ps_win_path "$__LNCH_DIR/entry.ps1")"
     MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$exe" -NoProfile -ExecutionPolicy Bypass -File "$entry" "$@"
 }

@@ -1,14 +1,20 @@
 # Changelog
 
+## v1.0.0
+
+- Renamed command and product from project-starter / `start` to **lnch**. Native PowerShell/cmd `start` behavior is restored; no compatibility alias remains.
+- Repository, module, source files, shell/cmd shims, environment variables (`LNCH_*`), install root (`~\.lnch`), user config (`%APPDATA%\lnch`), metadata (`.lnch.json`), release assets, URLs, and UI branding all move under lnch.
+- One-time migrations remove old profile/rc/AutoRun hooks, move legacy config, and rename `.ps-project.json` metadata on first access.
+
 ## v0.7.0
 
-- Bare `start` now has a polished dependency-free full-screen multi-select TUI: alternate-screen rendering, ANSI color, metadata-rich rows (agent, intent, activity), selected count, scrollable viewport, and keyboard controls for move/toggle/all/none/launch/cancel.
-- fzf mode receives a styled 85%-height multi-select interface with border, padding, inline status, markers, and all/none bindings; `OMP_NO_FZF=1` forces the built-in picker.
+- Bare `lnch` now has a polished dependency-free full-screen multi-select TUI: alternate-screen rendering, ANSI color, metadata-rich rows (agent, intent, activity), selected count, scrollable viewport, and keyboard controls for move/toggle/all/none/launch/cancel.
+- fzf mode receives a styled 85%-height multi-select interface with border, padding, inline status, markers, and all/none bindings; `LNCH_NO_FZF=1` forces the built-in picker.
 - Real PTY verification selects two projects and asserts exact two-tab fan-out.
 
 ## v0.6.0
 
-- Bare `start` is now a multi-project launcher: fzf uses `--multi` (`Tab` toggles, `Enter` accepts), and the numbered fallback accepts lists/ranges such as `1,3-5` or `all`.
+- Bare `lnch` is now a multi-project launcher: fzf uses `--multi` (`Tab` toggles, `Enter` accepts), and the numbered fallback accepts lists/ranges such as `1,3-5` or `all`.
 - Every selected project launches through the normal agent/resume path into its own same-window Windows Terminal tab.
 - Native and bash-face suites assert exact multi-tab fan-out; parser tests cover ranges, deduplication, and all-selection.
 
@@ -18,7 +24,7 @@
 
 ## v0.5.3
 
-- Default project root is now `<current working directory>\projects` at invocation time; `OMP_PROJECTS_DIR` remains the explicit override.
+- Default project root is now `<current working directory>\projects` at invocation time; `LNCH_PROJECTS_DIR` remains the explicit override.
 - Picker, doctor, tab completion, and project creation share one root resolver.
 
 ## v0.5.2
@@ -30,34 +36,34 @@
 ## v0.5.1
 
 - New projects are seeded with **AGENTS.md** (the cross-harness instruction standard: overview / build & test / code style / security notes) plus `CLAUDE.md` (`@AGENTS.md` import) and `GEMINI.md` pointers.
-- **Post-create hooks**: add `"postCreate": ["command1", ...]` to `%APPDATA%\project-starter\config.json`; each command runs inside the fresh project directory after creation (failures warn, never block).
+- **Post-create hooks**: add `"postCreate": ["command1", ...]` to `%APPDATA%\lnch\config.json`; each command runs inside the fresh project directory after creation (failures warn, never block).
 - Capability verbs (`:pick`, `:yolo`, `:plan`, ...) are now recognized **anywhere** among prompt words via a known-verb whitelist; unknown `:tokens` pass through untouched.
-- `start --version` / `-v` through all shell faces.
+- `lnch --version` / `-v` through all shell faces.
 
 ## v0.5.0
 
 - **Capability dispatch ("the tent")**: one verb vocabulary normalized across agents. Registry v2 `caps` map per agent; v0.3 legacy keys auto-migrate. Unsupported verbs warn and skip gracefully.
-- `start -Doctor` renders a capability matrix: every installed agent x every verb.
+- `lnch -Doctor` renders a capability matrix: every installed agent x every verb.
 
 ## v0.4.0
 
-- One-command remote installs per shell (`bootstrap.ps1` / `bootstrap.sh`), installing to `~\.project-starter`; idempotent re-runs update an existing clone; version-pinned + SHA256-verified downloads.
+- One-command remote installs per shell (`bootstrap.ps1` / `bootstrap.sh`), installing to `~\.lnch`; idempotent re-runs update an existing clone; version-pinned + SHA256-verified downloads.
 - Built-in agent fleet grows to seven: omp, claude, codex, gemini, aider, opencode, qwen.
-- New projects ask which agent to launch (picker over *installed* agents); persisted default agent in `%APPDATA%\project-starter\config.json`.
-- `start -Doctor`, `start -Version`, cached update check (`OMP_NO_UPDATE_CHECK=1` disables).
+- New projects ask which agent to launch (picker over *installed* agents); persisted default agent in `%APPDATA%\lnch\config.json`.
+- `lnch -Doctor`, `lnch -Version`, cached update check (`LNCH_NO_UPDATE_CHECK=1` disables).
 - PowerShell Gallery manifest; GitHub Actions CI with PSScriptAnalyzer gate, both stubbed suites and a remote-bootstrap smoke test on windows-latest.
 
 ## v0.3.0
 
-- cmd shim (`shell/start-cli.cmd`, `install-cmd.ps1`, interactive-only doskey macro via HKCU AutoRun; `/c`+`/k` guarded).
+- cmd shim (`shell/lnch-cli.cmd`, `install-cmd.ps1`, interactive-only doskey macro via HKCU AutoRun; `/c`+`/k` guarded).
 
 ## v0.2.0
 
-- bash/zsh shim (`shell/start.sh`, `install.sh`, `uninstall.sh`) with dependency-free POSIX->Windows path conversion.
+- bash/zsh shim (`shell/lnch.sh`, `install.sh`, `uninstall.sh`) with dependency-free POSIX->Windows path conversion.
 
 ## v0.1.0
 
-- Initial release: create/reuse projects under `%OMP_PROJECTS_DIR%` (default `C:\projects`), `git init -b main`,
-  resume detection (.ps-project.json marker -> .claude/.codex/.gemini fingerprints -> omp session buckets),
+- Initial release: create/reuse projects under `%LNCH_PROJECTS_DIR%` (default `C:\projects`), `git init -b main`,
+  resume detection (.lnch.json marker -> .claude/.codex/.gemini fingerprints -> omp session buckets),
   intent metadata, project picker (fzf/numbered), Windows Terminal tab handoff,
   MIT license, engine test matrix.

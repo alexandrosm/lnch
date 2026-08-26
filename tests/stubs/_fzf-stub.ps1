@@ -1,5 +1,5 @@
 $l = @($input | Where-Object { $_ })
-if ($env:OMP_TEST_FZF_MULTI) {
+if ($env:LNCH_TEST_FZF_MULTI) {
     @($l | Where-Object { $_ -like 'theta*' -or $_ -like 'alpha*' }) | Write-Output
     return
 }

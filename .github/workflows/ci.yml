@@ -9,7 +9,7 @@ jobs:
   windows-tests:
     runs-on: windows-latest
     env:
-      STARTER_DIR: ${{ github.workspace }}
+      LNCH_DIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,15 +32,15 @@ jobs:
       - name: Doctor smoke
         shell: pwsh
         run: |
-          . ./Start-Project.ps1
-          start -Doctor
+          . ./Lnch.ps1
+          lnch -Doctor
 
       - name: Remote bootstrap smoke (published one-liner path)
         shell: pwsh
         run: |
           # exercise the real download+install flow (fetches current main)
           ./bootstrap.ps1
-          $installed = Join-Path $env:USERPROFILE '.project-starter'
-          if (-not (Test-Path (Join-Path $installed 'Start-Project.ps1'))) { throw 'bootstrap did not install the engine' }
-          . (Join-Path $installed 'Start-Project.ps1')
-          if (-not (${function:start})) { throw 'installed engine did not define start' }
+          $installed = Join-Path $env:USERPROFILE '.lnch'
+          if (-not (Test-Path (Join-Path $installed 'Lnch.ps1'))) { throw 'bootstrap did not install the engine' }
+          . (Join-Path $installed 'Lnch.ps1')
+          if (-not (${function:lnch})) { throw 'installed engine did not define lnch' }

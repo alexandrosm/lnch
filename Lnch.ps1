@@ -1,11 +1,11 @@
-# project-starter: the `start` command for PowerShell.
+# lnch: the `lnch` command for PowerShell.
 #
-#   start                      pick an existing project (fzf if installed, else numbered list;
+#   lnch                      pick an existing project (fzf if installed, else numbered list;
 #                              shows saved intent + last-active time)
-#   start <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
+#   lnch <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
 #                              extra words become the agent's initial prompt AND are saved
 #                              as the project's intent
-#   start <name> ... -Yolo     shorthand for the :yolo capability
+#   lnch <name> ... -Yolo     shorthand for the :yolo capability
 #
 #   CAPABILITY VERBS (may appear anywhere among the prompt words):
 #     :pick              resume, choosing among past sessions
@@ -18,7 +18,7 @@
 #   postCreate commands from config.json run inside the fresh directory.
 #
 #   Reopening an existing project auto-resumes with the agent that last ran there:
-#   recorded in .ps-project.json ({agent,intent,created,updated}), falling back to
+#   recorded in .lnch.json ({agent,intent,created,updated}), falling back to
 #   .claude/.codex/.gemini fingerprints and omp's own session buckets.
 #
 #   AGENT REGISTRY: built-ins below; an optional agents.json next to this script
@@ -28,15 +28,11 @@
 #     v0.3 legacy: continueArgs / takesPromptOnContinue / yoloFlags (auto-migrated)
 #
 #   -Here   launch inline instead of a new tab.
-#   Root:   $env:OMP_PROJECTS_DIR, otherwise <current working directory>\projects
-#   Config: %APPDATA%\project-starter\config.json (override dir: $env:OMP_CONFIG_DIR)
+#   Root:   $env:LNCH_PROJECTS_DIR, otherwise <current working directory>\projects
+#   Config: %APPDATA%\lnch\config.json (override dir: $env:LNCH_CONFIG_DIR)
 
-if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
-    Remove-Item Alias:start -Force -ErrorAction SilentlyContinue
-}
-
-$script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.7.0'
+$script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$script:LnchVersion = '1.0.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -97,7 +93,7 @@ $script:AgentProfiles = @{
     }
 }
 
-function global:Get-StarterAgentRegistry {
+function global:Get-LnchAgentRegistry {
     # builtins -> overlay agents.json (v2 caps shape or v0.3 legacy shape)
     $table = @{}
     foreach ($k in $script:AgentProfiles.Keys) {
@@ -106,7 +102,7 @@ function global:Get-StarterAgentRegistry {
             Caps                = $script:AgentProfiles[$k].Caps
         }
     }
-    $registry = Join-Path $script:StarterRoot 'agents.json'
+    $registry = Join-Path $script:LnchRoot 'agents.json'
     if (Test-Path -LiteralPath $registry) {
         try {
             $custom = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
@@ -135,47 +131,55 @@ function global:Get-StarterAgentRegistry {
     $table
 }
 
-$script:AgentProfiles = Get-StarterAgentRegistry
+$script:AgentProfiles = Get-LnchAgentRegistry
 
-function global:Get-StarterConfigPath {
-    if ($env:OMP_CONFIG_DIR) { return $env:OMP_CONFIG_DIR }
+function global:Get-LnchConfigPath {
+    if ($env:LNCH_CONFIG_DIR) { return $env:LNCH_CONFIG_DIR }
     $base = [Environment]::GetFolderPath('ApplicationData')
     if (-not $base) { $base = if ($env:TEMP) { $env:TEMP } else { 'C:\Windows\Temp' } }
-    Join-Path $base 'project-starter'
+    $path = Join-Path $base 'lnch'
+    $legacy = Join-Path $base 'project-starter'
+    if (-not (Test-Path -LiteralPath $path) -and (Test-Path -LiteralPath $legacy)) {
+        try { Move-Item -LiteralPath $legacy -Destination $path -Force } catch {
+            Copy-Item -LiteralPath $legacy -Destination $path -Recurse -Force
+            Remove-Item -LiteralPath $legacy -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $path
 }
 
-function global:Get-StarterProjectsRoot {
-    if ($env:OMP_PROJECTS_DIR) {
-        return [System.IO.Path]::GetFullPath($env:OMP_PROJECTS_DIR)
+function global:Get-LnchProjectsRoot {
+    if ($env:LNCH_PROJECTS_DIR) {
+        return [System.IO.Path]::GetFullPath($env:LNCH_PROJECTS_DIR)
     }
     $cwd = (Get-Location).Path
     return [System.IO.Path]::GetFullPath((Join-Path $cwd 'projects'))
 }
 
-function global:Get-StarterUserConfig {
-    $p = Join-Path (Get-StarterConfigPath) 'config.json'
+function global:Get-LnchUserConfig {
+    $p = Join-Path (Get-LnchConfigPath) 'config.json'
     if (Test-Path -LiteralPath $p) {
         try { return Get-Content -LiteralPath $p -Raw | ConvertFrom-Json } catch { }
     }
     $null
 }
 
-function global:Get-StarterDefaultAgent {
-    $c = Get-StarterUserConfig
+function global:Get-LnchDefaultAgent {
+    $c = Get-LnchUserConfig
     if ($c -and $c.defaultAgent) { return $c.defaultAgent }
     $null
 }
 
-function global:Get-StarterPostCreateHook {
-    $c = Get-StarterUserConfig
+function global:Get-LnchPostCreateHook {
+    $c = Get-LnchUserConfig
     if ($c -and $c.postCreate) { return @($c.postCreate) }
     @()
 }
 
-function global:Set-StarterDefaultAgent {
+function global:Set-LnchDefaultAgent {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Agent)
-    $dir = Get-StarterConfigPath
+    $dir = Get-LnchConfigPath
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $p = Join-Path $dir 'config.json'
     $payload = @{ defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() } }
@@ -186,10 +190,10 @@ function global:Set-StarterDefaultAgent {
     else { Write-Host "default agent set to '$($Agent.Trim())'" }
 }
 
-function script:Get-StarterUpdateNoticeState {
+function script:Get-LnchUpdateNoticeState {
     # returns latest release tag or $null; caches for 24h; never throws
-    if ($env:OMP_NO_UPDATE_CHECK) { return $null }
-    $cacheFile = Join-Path (Get-StarterConfigPath) 'update-cache.json'
+    if ($env:LNCH_NO_UPDATE_CHECK) { return $null }
+    $cacheFile = Join-Path (Get-LnchConfigPath) 'update-cache.json'
     if (Test-Path -LiteralPath $cacheFile) {
         try {
             $c = Get-Content -LiteralPath $cacheFile -Raw | ConvertFrom-Json
@@ -198,31 +202,44 @@ function script:Get-StarterUpdateNoticeState {
     }
     $latest = $null
     try {
-        $latest = (Invoke-RestMethod -Uri 'https://api.github.com/repos/alexandrosm/project-starter/releases/latest' `
-            -TimeoutSec 3 -Headers @{ 'User-Agent' = 'project-starter' }).tag_name
+        $latest = (Invoke-RestMethod -Uri 'https://api.github.com/repos/alexandrosm/lnch/releases/latest' `
+            -TimeoutSec 3 -Headers @{ 'User-Agent' = 'lnch' }).tag_name
         @{ latest = $latest; checked = (Get-Date).ToString('o') } |
             ConvertTo-Json | Set-Content -LiteralPath $cacheFile -Encoding utf8
     } catch { }
     return $latest
 }
 
-function global:Show-StarterUpdateNotice {
-    $latest = Get-StarterUpdateNoticeState
+function global:Show-LnchUpdateNotice {
+    $latest = Get-LnchUpdateNoticeState
     if (-not $latest) { return }
     try {
         $latestVersion = [version]$latest.TrimStart('v')
-        $currentVersion = [version]$script:StarterVersion
+        $currentVersion = [version]$script:LnchVersion
         if ($latestVersion -gt $currentVersion) {
-            Write-Host ("update available: {0} (installed v{1}) - rerun the install one-liner from the README" -f $latest, $script:StarterVersion)
+            Write-Host ("update available: {0} (installed v{1}) - rerun the install one-liner from the README" -f $latest, $script:LnchVersion)
         }
     } catch { }
+}
+
+function global:Get-LnchProjectMetaPath {
+    param([string]$Dir)
+    $path = Join-Path $Dir '.lnch.json'
+    $legacy = Join-Path $Dir '.ps-project.json'
+    if (-not (Test-Path -LiteralPath $path) -and (Test-Path -LiteralPath $legacy)) {
+        try { Move-Item -LiteralPath $legacy -Destination $path -Force } catch {
+            Copy-Item -LiteralPath $legacy -Destination $path -Force
+            Remove-Item -LiteralPath $legacy -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $path
 }
 
 function global:Get-ProjectAgent {
     param([string]$Dir)
 
     # 1) our own metadata records exactly what ran here last
-    $meta = Join-Path $Dir '.ps-project.json'
+    $meta = Get-LnchProjectMetaPath -Dir $Dir
     if (Test-Path -LiteralPath $meta) {
         try {
             $m = Get-Content -LiteralPath $meta -Raw | ConvertFrom-Json
@@ -257,7 +274,7 @@ function global:Get-ProjectAgent {
 function global:Write-ProjectMeta {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Dir, [string]$Agent, [string]$Intent)
-    $path = Join-Path $Dir '.ps-project.json'
+    $path = Get-LnchProjectMetaPath -Dir $Dir
     $prev = $null
     if (Test-Path -LiteralPath $path) {
         try { $prev = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { }
@@ -272,7 +289,7 @@ function global:Write-ProjectMeta {
     }
 }
 
-function global:ConvertFrom-StarterProjectSelection {
+function global:ConvertFrom-LnchProjectSelection {
     param([string]$Selection, [int]$Count)
     if ([string]::IsNullOrWhiteSpace($Selection)) { return @() }
     if ($Selection.Trim() -match '^(all|\*)$') { return @(1..$Count) }
@@ -291,7 +308,7 @@ function global:ConvertFrom-StarterProjectSelection {
     return @($indexes)
 }
 
-function script:Get-StarterRelativeAge {
+function script:Get-LnchRelativeAge {
     param([datetime]$When)
     $span = (Get-Date) - $When
     if ($span.TotalSeconds -lt 0 -or $span.TotalMinutes -lt 1) { return 'now' }
@@ -301,7 +318,7 @@ function script:Get-StarterRelativeAge {
     return $When.ToString('yyyy-MM-dd')
 }
 
-function global:Select-StarterProjectConsole {
+function global:Select-LnchProjectConsole {
     param([object[]]$Items, [string]$Root)
     if ($Items.Count -eq 0) { return @() }
 
@@ -331,7 +348,7 @@ function global:Select-StarterProjectConsole {
             $selectedCount = @($selected | Where-Object { $_ }).Count
 
             Write-Host "$esc[2J$esc[H" -NoNewline
-            Write-Host ("{0}+-- PROJECT STARTER {1}:: MULTI-LAUNCH ---------------------------+{2}" -f $cyan, $dim, $reset)
+            Write-Host ("{0}+-- LNCH {1}:: MULTI-LAUNCH --------------------------------------+{2}" -f $cyan, $dim, $reset)
             Write-Host ("{0}|{1}  Root      {2}{3}{4}" -f $cyan, $reset, $dim, $Root, $reset)
             Write-Host ("{0}|{1}  Selected  {2}{3}{4} of {5}" -f $cyan, $reset, $green, $selectedCount, $reset, $Items.Count)
             Write-Host ("{0}+------------------------------------------------------------------+{1}" -f $cyan, $reset)
@@ -389,7 +406,7 @@ function global:Select-StarterProjectConsole {
     }
 }
 
-function global:Select-StarterProjectSet {
+function global:Select-LnchProjectSet {
     param([string]$Root)
     $dirs = @()
     if (Test-Path -LiteralPath $Root) {
@@ -397,7 +414,7 @@ function global:Select-StarterProjectSet {
     }
     if ($dirs.Count -eq 0) {
         Write-Host "no projects under $Root yet."
-        Write-Host 'usage: start <name> [initial prompt...]'
+        Write-Host 'usage: lnch <name> [initial prompt...]'
         return @()
     }
 
@@ -405,7 +422,7 @@ function global:Select-StarterProjectSet {
         $intent = $null
         $agent = $null
         $lastActive = $d.LastWriteTime
-        $metaPath = Join-Path $d.FullName '.ps-project.json'
+        $metaPath = Get-LnchProjectMetaPath -Dir $d.FullName
         if (Test-Path -LiteralPath $metaPath) {
             try {
                 $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
@@ -418,7 +435,7 @@ function global:Select-StarterProjectSet {
             Name   = $d.Name
             Intent = $intent
             Agent  = $agent
-            Age    = script:Get-StarterRelativeAge $lastActive
+            Age    = script:Get-LnchRelativeAge $lastActive
         }
     }
 
@@ -428,7 +445,7 @@ function global:Select-StarterProjectSet {
         '{0}  |  {1}  |  {2}  |  {3}' -f $_.Name, $(if ($_.Agent) { $_.Agent.ToUpper() } else { 'AUTO' }), $shown, $_.Age
     })
 
-    if (-not $env:OMP_NO_FZF -and (@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
+    if (-not $env:LNCH_NO_FZF -and (@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
         $fzfArgs = @(
             '--multi', '--height', '85%', '--layout', 'reverse', '--border', 'rounded',
             '--margin', '1,2', '--padding', '1,2', '--info', 'inline',
@@ -444,7 +461,7 @@ function global:Select-StarterProjectSet {
     $interactive = $false
     try { $interactive = ($Host.Name -eq 'ConsoleHost') -and (-not [Console]::IsInputRedirected) } catch { }
     if ($interactive) {
-        try { return @(Select-StarterProjectConsole -Items $items -Root $Root) } catch {
+        try { return @(Select-LnchProjectConsole -Items $items -Root $Root) } catch {
             Write-Warning "rich picker unavailable; using numbered fallback: $_"
         }
     }
@@ -453,11 +470,11 @@ function global:Select-StarterProjectSet {
         ('{0,3}. {1,-24} {2,-10} {3}' -f ($i + 1), $items[$i].Name, $(if ($items[$i].Agent) { $items[$i].Agent } else { 'auto' }), $items[$i].Intent) | Write-Host
     }
     $answer = Read-Host 'project numbers (1,3-5 or all; blank cancels)'
-    $selectedIndexes = @(ConvertFrom-StarterProjectSelection -Selection $answer -Count $items.Count)
+    $selectedIndexes = @(ConvertFrom-LnchProjectSelection -Selection $answer -Count $items.Count)
     return @($selectedIndexes | ForEach-Object { $items[$_ - 1].Name })
 }
 
-function global:Select-StarterAgent {
+function global:Select-LnchAgent {
     param([string[]]$Candidates)
     if ($Candidates.Count -eq 0) { return 'omp' }
     if ((@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
@@ -478,7 +495,7 @@ function global:Select-StarterAgent {
     $null
 }
 
-function global:start {
+function global:lnch {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)]
@@ -496,15 +513,15 @@ function global:start {
 
     # --- management modes ------------------------------------------------
     if ($Version) {
-        Write-Output ("project-starter v{0}" -f $script:StarterVersion)
+        Write-Output ("lnch v{0}" -f $script:LnchVersion)
         return
     }
     if ($PSBoundParameters.ContainsKey('SetDefaultAgent')) {
-        Set-StarterDefaultAgent -Agent $SetDefaultAgent
+        Set-LnchDefaultAgent -Agent $SetDefaultAgent
         return
     }
     if ($Doctor) {
-        Write-Host ("== project-starter doctor (v{0}) ==" -f $script:StarterVersion)
+        Write-Host ("== lnch doctor (v{0}) ==" -f $script:LnchVersion)
         foreach ($tool in @('git', 'wt', 'fzf', 'pwsh', 'powershell')) {
             $c = @(Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
             if ($c) { Write-Host ("[ok] {0,-11} {1}" -f $tool, $c.Source) }
@@ -520,9 +537,9 @@ function global:start {
             $tag = if ($exe) { 'ok' } else { '--' }
             Write-Host ("[{0}] {1,-9} {2}" -f $tag, $a, ($cells -join ' '))
         }
-        $hooks = @(Get-StarterPostCreateHook)
+        $hooks = @(Get-LnchPostCreateHook)
         Write-Host ("[--] post-create hooks configured: {0}" -f $hooks.Count)
-        try { $rootNow = Get-StarterProjectsRoot } catch { $rootNow = '<invalid>' }
+        try { $rootNow = Get-LnchProjectsRoot } catch { $rootNow = '<invalid>' }
         $writable = $false
         try {
             $probe = Join-Path $rootNow '.doctor-probe'
@@ -531,13 +548,13 @@ function global:start {
             $writable = $true
         } catch { }
         Write-Host ("[{0}] projects root {1} (writable={2})" -f ($(if ($writable) { 'ok' } else { '!!' })), $rootNow, $writable)
-        $def = Get-StarterDefaultAgent
+        $def = Get-LnchDefaultAgent
         Write-Host ("[--] default agent: {0}" -f ($(if ($def) { $def } else { '<unset - picker decides on new projects>' })))
         $ar = (Get-ItemProperty 'HKCU:\Software\Microsoft\Command Processor' -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
-        Write-Host ("[{0}] cmd AutoRun hook" -f ($(if ($ar -match 'project-starter') { 'ok' } else { '--' })))
+        Write-Host ("[{0}] cmd AutoRun hook" -f ($(if ($ar -match 'lnch') { 'ok' } else { '--' })))
         foreach ($rcf in @('$HOME\.bashrc', '$HOME\.zshrc')) {
             $rp = $ExecutionContext.InvokeCommand.ExpandString($rcf)
-            $hit = (Test-Path -LiteralPath $rp) -and (Get-Content -LiteralPath $rp -ErrorAction SilentlyContinue | Where-Object { $_ -match 'project-starter' })
+            $hit = (Test-Path -LiteralPath $rp) -and (Get-Content -LiteralPath $rp -ErrorAction SilentlyContinue | Where-Object { $_ -match 'lnch' })
             Write-Host ("[{0}] {1}" -f ($(if ($hit) { 'ok' } else { '--' })), $rp)
         }
         return
@@ -547,16 +564,16 @@ function global:start {
 
     if ($FromLauncher) {
         # relaunched inside the new tab; state travels via inherited env vars
-        $Name             = $env:OMP_START_NAME
-        $raw              = $env:OMP_START_PROMPT
+        $Name             = $env:LNCH_NAME
+        $raw              = $env:LNCH_PROMPT
         $Prompt           = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
-        $yoloWanted       = ($env:OMP_START_YOLO -eq '1')
-        $launcherAgent    = $env:OMP_START_AGENT
-        $launcherFresh    = ($env:OMP_START_FRESH -eq '1')
-        $launcherVerbJson = $env:OMP_START_VERBS
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS -ErrorAction SilentlyContinue
+        $yoloWanted       = ($env:LNCH_YOLO -eq '1')
+        $launcherAgent    = $env:LNCH_AGENT
+        $launcherFresh    = ($env:LNCH_FRESH -eq '1')
+        $launcherVerbJson = $env:LNCH_VERBS
+        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS -ErrorAction SilentlyContinue
     } else {
-        Show-StarterUpdateNotice
+        Show-LnchUpdateNotice
     }
 
     # --- extract known capability verbs from anywhere in the prompt -------
@@ -599,14 +616,14 @@ function global:start {
     }
 
     try {
-        $rootFull = Get-StarterProjectsRoot
+        $rootFull = Get-LnchProjectsRoot
     } catch {
         Write-Error "projects root is invalid: $_"
         return
     }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {
-        $selectedProjects = @(Select-StarterProjectSet -Root $rootFull)
+        $selectedProjects = @(Select-LnchProjectSet -Root $rootFull)
         if ($selectedProjects.Count -eq 0) { return }
         if ($selectedProjects.Count -eq 1) {
             $Name = $selectedProjects[0]
@@ -617,7 +634,7 @@ function global:start {
                 if ($selectedVerb.Name -eq 'model') { $forwardPrompt += $selectedVerb.Value }
             }
             $forwardPrompt += @($Prompt)
-            $startFn = ${function:start}
+            $startFn = ${function:lnch}
             foreach ($selectedProject in $selectedProjects) {
                 $invoke = @{ Name = $selectedProject; Here = [bool]$Here }
                 if ($Agent) { $invoke.Agent = $Agent }
@@ -717,16 +734,16 @@ function global:start {
         }
         elseif ($FromLauncher -and $launcherAgent) { $agent = $launcherAgent }
         else {
-            $def = Get-StarterDefaultAgent
+            $def = Get-LnchDefaultAgent
             if ($def -and ($installed | Where-Object { $_ -eq $def })) {
                 $agent = $def
-                Write-Host "using default agent '$def' (change: start -SetDefaultAgent <name>|none)"
+                Write-Host "using default agent '$def' (change: lnch -SetDefaultAgent <name>|none)"
             }
             elseif ($installed.Count -eq 1) { $agent = $installed[0] }
             elseif ($installed.Count -gt 1) {
-                $agent = Select-StarterAgent -Candidates $installed
+                $agent = Select-LnchAgent -Candidates $installed
                 if (-not $agent) { $agent = 'omp' }
-                Write-Host "selected agent: $agent (make permanent: start -SetDefaultAgent $agent)"
+                Write-Host "selected agent: $agent (make permanent: lnch -SetDefaultAgent $agent)"
             }
             else {
                 $agent = 'omp'
@@ -740,17 +757,17 @@ function global:start {
     # default: hand off to a fresh Windows Terminal tab
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     if (-not $FromLauncher -and -not $Here -and $wt) {
-        $env:OMP_START_NAME   = $Name
-        $env:OMP_START_PROMPT = if ($Prompt) { $Prompt -join ' ' } else { '' }
-        $env:OMP_START_YOLO   = if ($yoloWanted) { '1' } else { '' }
-        $env:OMP_START_AGENT  = $agent
-        $env:OMP_START_FRESH  = if ($isNew) { '1' } else { '' }
+        $env:LNCH_NAME   = $Name
+        $env:LNCH_PROMPT = if ($Prompt) { $Prompt -join ' ' } else { '' }
+        $env:LNCH_YOLO   = if ($yoloWanted) { '1' } else { '' }
+        $env:LNCH_AGENT  = $agent
+        $env:LNCH_FRESH  = if ($isNew) { '1' } else { '' }
         $verbPayload = @()
         foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
-        $env:OMP_START_VERBS = ConvertTo-Json -InputObject @{ Verbs = $verbPayload } -Depth 4 -Compress
+        $env:LNCH_VERBS = ConvertTo-Json -InputObject @{ Verbs = $verbPayload } -Depth 4 -Compress
         $sh = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
         $shellExe = if ($sh) { $sh.Source } else { Join-Path $PSHOME 'powershell.exe' }
-        $launcher = Join-Path $script:StarterRoot 'Start-InTab.ps1'
+        $launcher = Join-Path $script:LnchRoot 'Lnch-InTab.ps1'
         $tabTitle = Split-Path -Path $dir -Leaf
         & $wt.Source -w 0 new-tab --title $tabTitle --suppressApplicationTitle -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
         if ($LASTEXITCODE -eq 0) {
@@ -758,13 +775,13 @@ function global:start {
             return
         }
         Write-Warning "wt exited with $($LASTEXITCODE); launching inline instead"
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS -ErrorAction SilentlyContinue
+        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS -ErrorAction SilentlyContinue
     }
 
     Set-Location -LiteralPath $dir
     # --- post-create hooks (fresh projects only) ---------------------------
     if ($isNew) {
-        foreach ($h in (Get-StarterPostCreateHook)) {
+        foreach ($h in (Get-LnchPostCreateHook)) {
             Write-Host "post-create hook: $h"
             try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
         }
@@ -810,9 +827,9 @@ function global:start {
 }
 
 # <Tab> completes project names from the projects root
-Register-ArgumentCompleter -CommandName start -ParameterName Name -ScriptBlock {
+Register-ArgumentCompleter -CommandName lnch -ParameterName Name -ScriptBlock {
     param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
-    try { $root = Get-StarterProjectsRoot } catch { return }
+    try { $root = Get-LnchProjectsRoot } catch { return }
     if (Test-Path -LiteralPath $root) {
         Get-ChildItem -LiteralPath $root -Directory -Filter "$wordToComplete*" -ErrorAction SilentlyContinue |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_.Name) }

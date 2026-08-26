@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Removes project-starter lines from ~/.bashrc and ~/.zshrc.
+# Removes lnch and legacy project-starter rc lines.
 for f in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [ -f "$f" ] || continue
-    if grep -qF '# project-starter' "$f"; then
-        sed -i '/# project-starter/d' "$f"
+    if grep -qE '# (lnch|project-starter)' "$f"; then
+        sed -i '/# lnch/d; /# project-starter/d' "$f"
         echo "removed lines from $f"
     else
         echo "nothing to remove: $f"

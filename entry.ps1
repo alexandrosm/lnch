@@ -1,9 +1,9 @@
-# CLI shim entry: maps flat argv onto the `start` function.
-# Called by shell/start-cli.cmd (cmd doskey macro) and shell/start.sh (bash/zsh).
+# CLI shim entry: maps flat argv onto the `lnch` function.
+# Called by shell/lnch-cli.cmd (cmd doskey macro) and shell/lnch.sh (bash/zsh).
 # Flags: --yolo/-yolo, --here/-here, --doctor, --version/-v, --agent <name>,
 #        --default-agent <name|none>
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'Start-Project.ps1')
+. (Join-Path $PSScriptRoot 'Lnch.ps1')
 
 $yolo = $false
 $here = $false
@@ -34,14 +34,14 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     else { $prompt.Add($a) }
 }
 
-if ($showVersion) { start -Version; return }
-if ($doctor) { start -Doctor; return }
+if ($showVersion) { lnch -Version; return }
+if ($doctor) { lnch -Doctor; return }
 if ($setDef -ne '' -or ($setDef -eq '' -and $args -contains '--default-agent') -or $args -contains '-default-agent') {
-    start -SetDefaultAgent $setDef
+    lnch -SetDefaultAgent $setDef
     return
 }
 
 $call = @{ Name = $name; Yolo = $yolo; Here = $here }
 if ($agent) { $call.Agent = $agent }
 if ($prompt.Count -gt 0) { $call.Prompt = [string[]]$prompt.ToArray() }
-start @call
+lnch @call

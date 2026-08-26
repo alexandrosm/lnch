@@ -1,61 +1,50 @@
-# Registers/unregisters an interactive-only doskey `start` macro for cmd.exe.
-# Installs shell\cmd-autorun.bat and chains it into HKCU Command Processor AutoRun.
-# The .bat skips itself when cmd runs with /c or /k using DELAYED EXPANSION so the
-# quoted %cmdcmdline% value never re-parses; scripted `cmd /c start ...` therefore
-# keeps using cmd's built-in start.
+# Registers/unregisters an interactive-only doskey `lnch` macro for cmd.exe.
+# Removes legacy project-starter/start AutoRun hooks during install/remove.
 param([switch]$Remove)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$bat  = Join-Path $root 'shell\cmd-autorun.bat'
+$bat  = Join-Path $root 'shell\lnch-cmd-autorun.bat'
+$cli  = Join-Path $root 'shell\lnch-cli.cmd'
 $key  = 'HKCU:\Software\Microsoft\Command Processor'
+$legacyBat = Join-Path $root 'shell\cmd-autorun.bat'
 
-if (-not $Remove) {
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'Start-Project.ps1'))) {
-        throw "run install-cmd.ps1 from the project-starter checkout"
-    }
-    # generate the autorun hook with this checkout's absolute path
-    $lines = @(
-        '@echo off',
-        'rem project-starter: `start` macro for INTERACTIVE cmd only.',
-        'setlocal enabledelayedexpansion',
-        'set "PS_CL=%cmdcmdline%"',
-        'if defined PS_CL (',
-        '    if not "!PS_CL:/c=!"=="!PS_CL!" exit /b 0',
-        '    if not "!PS_CL:/k=!"=="!PS_CL!" exit /b 0',
-        ')',
-        ('doskey start="' + $bat + '" $*'),
-        'endlocal'
-    )
-    New-Item -ItemType Directory -Force -Path (Split-Path $bat -Parent) | Out-Null
-    Set-Content -LiteralPath $bat -Value ($lines -join "`r`n") -Encoding ascii
-
-    if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
-    $cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
-    if ($cur -and $cur -match 'project-starter') {
-        Write-Host "already installed: $key\AutoRun"
-        return
-    }
-    $seg = "`"$bat`""
-    $new = if ($cur) { "$cur & $seg" } else { $seg }
-    if ($cur) {
-        Set-ItemProperty -Path $key -Name AutoRun -Value $new
-    } else {
-        New-ItemProperty -Path $key -Name AutoRun -Value $new -PropertyType String | Out-Null
-    }
-    Write-Host "installed: $key\AutoRun"
-} else {
-    $cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
-    if (-not $cur -or $cur -notmatch 'project-starter') {
-        Write-Host 'nothing to remove'
-        return
-    }
-    $kept = @($cur -split '&' | Where-Object { $_ -notmatch 'project-starter' } | ForEach-Object { $_.Trim() }) -join ' & '
-    if ($kept) {
-        Set-ItemProperty -Path $key -Name AutoRun -Value $kept
-    } else {
-        Remove-ItemProperty -Path $key -Name AutoRun
-    }
-    Remove-Item -LiteralPath $bat -Force -ErrorAction SilentlyContinue
-    Write-Host "removed project-starter from $key\AutoRun"
+function Get-CleanAutoRun([string]$Value) {
+    if (-not $Value) { return '' }
+    return (@($Value -split '&' | Where-Object { $_ -notmatch '(?i)(project-starter|lnch)' } |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' & ')
 }
+
+if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+$cur = (Get-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
+$clean = Get-CleanAutoRun $cur
+
+if ($Remove) {
+    if ($clean) { Set-ItemProperty -Path $key -Name AutoRun -Value $clean }
+    else { Remove-ItemProperty -Path $key -Name AutoRun -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $bat, $legacyBat -Force -ErrorAction SilentlyContinue
+    Write-Host "removed lnch/legacy hooks from $key\AutoRun"
+    return
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $root 'Lnch.ps1'))) { throw 'run install-cmd.ps1 from the lnch checkout' }
+$lines = @(
+    '@echo off',
+    'rem lnch macro for INTERACTIVE cmd only.',
+    'setlocal enabledelayedexpansion',
+    'set "LNCH_CL=%cmdcmdline%"',
+    'if defined LNCH_CL (',
+    '    if not "!LNCH_CL:/c=!"=="!LNCH_CL!" exit /b 0',
+    '    if not "!LNCH_CL:/k=!"=="!LNCH_CL!" exit /b 0',
+    ')',
+    ('doskey lnch="' + $cli + '" $*'),
+    'endlocal'
+)
+Set-Content -LiteralPath $bat -Value ($lines -join "`r`n") -Encoding ascii
+Remove-Item -LiteralPath $legacyBat -Force -ErrorAction SilentlyContinue
+
+$seg = "`"$bat`""
+$new = if ($clean) { "$clean & $seg" } else { $seg }
+if ($cur) { Set-ItemProperty -Path $key -Name AutoRun -Value $new }
+else { New-ItemProperty -Path $key -Name AutoRun -Value $new -PropertyType String | Out-Null }
+Write-Host "installed: $key\AutoRun"

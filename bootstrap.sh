@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# project-starter remote bootstrap for bash/zsh boxes:
-#   curl -fsSL https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap.sh | bash
-# Optional: ./bootstrap.sh v0.3.0 pins a tagged release (default: latest release,
+# lnch remote bootstrap for bash/zsh boxes:
+#   curl -fsSL https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.sh | bash
+# Optional: ./bootstrap.sh v1.0.0 pins a tagged release (default: latest release,
 # falling back to the main branch when the API is unreachable). Tagged downloads
 # are SHA256-verified against the release's SHA256SUMS.
 set -e
 
-REPO="https://github.com/alexandrosm/project-starter"
-API="https://api.github.com/repos/alexandrosm/project-starter"
-DEST="$HOME/.project-starter"
+REPO="https://github.com/alexandrosm/lnch"
+API="https://api.github.com/repos/alexandrosm/lnch"
+DEST="$HOME/.lnch"
+LEGACY_DEST="$HOME/.project-starter"
 VERSION="${1:-}"
 
 if [ -z "$VERSION" ]; then
@@ -24,10 +25,10 @@ fi
 mkdir -p "$DEST"
 
 fetch_and_verify() {
-    curl -fsSL "$REPO/releases/download/$VERSION/project-starter-$VERSION.zip" -o starter.zip
+    curl -fsSL "$REPO/releases/download/$VERSION/lnch-$VERSION.zip" -o lnch.zip
     curl -fsSL "$REPO/releases/download/$VERSION/SHA256SUMS" -o SHA256SUMS
-    expected="$(grep "project-starter-$VERSION.zip" SHA256SUMS | awk '{print $1}')"
-    actual="$(sha256sum starter.zip | awk '{print $1}')"
+    expected="$(grep "lnch-$VERSION.zip" SHA256SUMS | awk '{print $1}')"
+    actual="$(sha256sum lnch.zip | awk '{print $1}')"
     [ -n "$expected" ] || { echo 'SHA256SUMS missing archive entry'; exit 1; }
     [ "$actual" = "$expected" ] || { echo "checksum mismatch: expected $expected got $actual"; exit 1; }
     echo 'checksum verified'
@@ -48,11 +49,12 @@ else
     fetch_and_verify
     rm -rf "$DEST"
     mkdir -p "$DEST"
-    unzip -q starter.zip && mv "project-starter-$VERSION"/* "$DEST"/ && rmdir "project-starter-$VERSION"
-    rm -f starter.zip SHA256SUMS
+    unzip -q lnch.zip && mv "lnch-$VERSION"/* "$DEST"/ && rmdir "lnch-$VERSION"
+    rm -f lnch.zip SHA256SUMS
 fi
 
 bash "$DEST/install.sh"
+rm -rf "$LEGACY_DEST"
 
 echo ''
-echo 'done. open a NEW terminal, then:  start my-project'
+echo 'done. open a NEW terminal, then:  lnch my-project'

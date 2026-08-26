@@ -19,10 +19,10 @@ jobs:
         shell: pwsh
         run: |
           $tag = ${env:GITHUB_REF_NAME}
-          git archive --format=zip "--output=project-starter-$tag.zip" $tag
-          $hash = (Get-FileHash "project-starter-$tag.zip" -Algorithm SHA256).Hash
-          "$hash  project-starter-$tag.zip" | Set-Content SHA256SUMS
-          Get-ChildItem project-starter-*.zip, SHA256SUMS | Format-Table Name, Length
+          git archive --format=zip "--output=lnch-$tag.zip" $tag
+          $hash = (Get-FileHash "lnch-$tag.zip" -Algorithm SHA256).Hash
+          "$hash  lnch-$tag.zip" | Set-Content SHA256SUMS
+          Get-ChildItem lnch-*.zip, SHA256SUMS | Format-Table Name, Length
 
       - name: Create or update release with assets
         shell: pwsh
@@ -30,9 +30,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = ${env:GITHUB_REF_NAME}
-          gh release create $tag "project-starter-$tag.zip" SHA256SUMS `
+          gh release create $tag "lnch-$tag.zip" SHA256SUMS `
             --title $tag --generate-notes --verify-tag 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Output 'release exists - replacing assets'
-            gh release upload $tag "project-starter-$tag.zip" SHA256SUMS --clobber
+            gh release upload $tag "lnch-$tag.zip" SHA256SUMS --clobber
           }

@@ -1,6 +1,6 @@
-# project-starter remote bootstrap for PowerShell / cmd boxes:
+# lnch remote bootstrap for PowerShell / cmd boxes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <this-url> | iex"
-# Optional: -Version v0.3.0 pins a tagged release (default: latest release,
+# Optional: -Version v1.0.0 pins a tagged release (default: latest release,
 # falling back to the main branch when the API is unreachable).
 # Tagged downloads are SHA256-verified against the release's SHA256SUMS.
 param([string]$Version = '')
@@ -9,10 +9,11 @@ $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 $ProgressPreference = 'SilentlyContinue'
 
-$repo    = 'https://github.com/alexandrosm/project-starter'
-$api     = 'https://api.github.com/repos/alexandrosm/project-starter'
-$dest    = Join-Path $HOME '.project-starter'
-$headers = @{ 'User-Agent' = 'project-starter-bootstrap' }
+$repo    = 'https://github.com/alexandrosm/lnch'
+$api     = 'https://api.github.com/repos/alexandrosm/lnch'
+$dest    = Join-Path $HOME '.lnch'
+$legacyDest = Join-Path $HOME '.project-starter'
+$headers = @{ 'User-Agent' = 'lnch-bootstrap' }
 
 if (-not $Version) {
     Write-Host 'resolving latest release...'
@@ -25,10 +26,10 @@ if (-not $Version) {
     }
 }
 
-$tmpZip = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + ($Version -replace '[^A-Za-z0-9._-]', '') + '.zip')
-$tmpExt = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$tmpZip = Join-Path ([IO.Path]::GetTempPath()) ('lnch-' + ($Version -replace '[^A-Za-z0-9._-]', '') + '.zip')
+$tmpExt = Join-Path ([IO.Path]::GetTempPath()) ('lnch-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
-function Get-StarterFileSha256([string]$Path) {
+function Get-LnchFileSha256([string]$Path) {
     # raw .NET hash: immune to cmdlet/module availability in stripped hosts
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -43,29 +44,29 @@ function Get-StarterFileSha256([string]$Path) {
     }
 }
 
-Write-Host "fetching project-starter $Version..."
+Write-Host "fetching lnch $Version..."
 if ($Version -eq 'main') {
     Invoke-WebRequest -Uri "$repo/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing
-    $innerPrefix = 'project-starter-main'
+    $innerPrefix = 'lnch-main'
 } else {
-    Invoke-WebRequest -Uri "$repo/releases/download/$Version/project-starter-$Version.zip" -OutFile $tmpZip -UseBasicParsing
+    Invoke-WebRequest -Uri "$repo/releases/download/$Version/lnch-$Version.zip" -OutFile $tmpZip -UseBasicParsing
     $sumsTxt = Join-Path ([IO.Path]::GetTempPath()) 'SHA256SUMS'
     Invoke-WebRequest -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $sumsTxt -UseBasicParsing
     $sumLine = (Get-Content $sumsTxt) |
-        Where-Object { $_ -match ('project-starter-' + [regex]::Escape($Version) + '\.zip') } |
+        Where-Object { $_ -match ('lnch-' + [regex]::Escape($Version) + '\.zip') } |
         Select-Object -First 1
     if (-not $sumLine) { throw 'SHA256SUMS did not contain an entry for the archive' }
     $expected = ($sumLine -split '\s+')[0]
-    $actual = Get-StarterFileSha256 $tmpZip
+    $actual = Get-LnchFileSha256 $tmpZip
     if ($actual -ne $expected) { throw "checksum mismatch: expected $expected got $actual" }
     Write-Host 'checksum verified'
-    $innerPrefix = "project-starter-$Version"
+    $innerPrefix = "lnch-$Version"
 }
 
 if (Test-Path $tmpExt) { Remove-Item $tmpExt -Recurse -Force }
 Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpExt -Force
 $unpacked = Join-Path $tmpExt $innerPrefix
-if (-not (Test-Path (Join-Path $unpacked 'Start-Project.ps1'))) { $unpacked = $tmpExt }
+if (-not (Test-Path (Join-Path $unpacked 'Lnch.ps1'))) { $unpacked = $tmpExt }
 
 if (Test-Path (Join-Path $dest '.git')) {
     Write-Host 'updating existing clone...'
@@ -97,5 +98,10 @@ if ($bashExe -and (Test-Path $bashExe)) {
     Write-Host 'no MSYS2 bash found - skipping bash/zsh face (see README for manual install)'
 }
 
+if (Test-Path -LiteralPath $legacyDest) {
+    Remove-Item -LiteralPath $legacyDest -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host 'removed legacy ~/.project-starter install'
+}
+
 Write-Host ''
-Write-Host 'done. open a NEW window, then:  start my-project'
+Write-Host 'done. open a NEW window, then:  lnch my-project'
