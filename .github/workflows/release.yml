@@ -24,11 +24,15 @@ jobs:
           "$hash  project-starter-$tag.zip" | Set-Content SHA256SUMS
           Get-ChildItem project-starter-*.zip, SHA256SUMS | Format-Table Name, Length
 
-      - name: Create release with assets
+      - name: Create or update release with assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = ${env:GITHUB_REF_NAME}
           gh release create $tag "project-starter-$tag.zip" SHA256SUMS `
-            --title $tag --generate-notes --verify-tag
+            --title $tag --generate-notes --verify-tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output 'release exists - replacing assets'
+            gh release upload $tag "project-starter-$tag.zip" SHA256SUMS --clobber
+          }
