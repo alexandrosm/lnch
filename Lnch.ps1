@@ -32,7 +32,7 @@
 #   Config: %APPDATA%\lnch\config.json (override dir: $env:LNCH_CONFIG_DIR)
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.0.0'
+$script:LnchVersion = '1.0.1'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;

@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.1
+
+- Bash bootstrap checksum parsing no longer depends on `awk`; shell built-in `read` consumes `sha256sum`/SHA256SUMS output.
+
 ## v1.0.0
 
 - Renamed command and product from project-starter / `start` to **lnch**. Native PowerShell/cmd `start` behavior is restored; no compatibility alias remains.

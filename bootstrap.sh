@@ -27,8 +27,8 @@ mkdir -p "$DEST"
 fetch_and_verify() {
     curl -fsSL "$REPO/releases/download/$VERSION/lnch-$VERSION.zip" -o lnch.zip
     curl -fsSL "$REPO/releases/download/$VERSION/SHA256SUMS" -o SHA256SUMS
-    expected="$(grep "lnch-$VERSION.zip" SHA256SUMS | awk '{print $1}')"
-    actual="$(sha256sum lnch.zip | awk '{print $1}')"
+    IFS=' ' read -r expected _ < <(grep "lnch-$VERSION.zip" SHA256SUMS)
+    IFS=' ' read -r actual _ < <(sha256sum lnch.zip)
     [ -n "$expected" ] || { echo 'SHA256SUMS missing archive entry'; exit 1; }
     [ "$actual" = "$expected" ] || { echo "checksum mismatch: expected $expected got $actual"; exit 1; }
     echo 'checksum verified'
