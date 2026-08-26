@@ -16,6 +16,7 @@ $env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerSh
 
 $env:OMP_PROJECTS_DIR = $Projects
 
+$env:OMP_NO_UPDATE_CHECK = '1'
 # redirected user-config so persisted-default/hook tests never touch real %APPDATA%
 $env:OMP_CONFIG_DIR = Join-Path $TestRoot 'config'
 New-Item -ItemType Directory -Force -Path $env:OMP_CONFIG_DIR | Out-Null
@@ -82,14 +83,22 @@ try {
     Write-Host '=== F: new-tab handoff env contract ==='
     $out = & $__startFn epsilon hi there
     $j = $out -join ' '
-    Check 'F wt spawned'   ($j -match 'WT-STUB .*Start-InTab\.ps1')
-    Check 'F name'         ($env:OMP_START_NAME -eq 'epsilon')
-    Check 'F prompt'       ($env:OMP_START_PROMPT -eq 'hi there')
-    Check 'F yolo empty'   (-not $env:OMP_START_YOLO)
-    Check 'F agent env'    ($env:OMP_START_AGENT -eq 'omp')
-    $env:OMP_START_NAME = 'zeta'; $env:OMP_START_PROMPT = 'hi there'; $env:OMP_START_YOLO = ''; $env:OMP_START_AGENT = ''
+    Check 'F same-window tab' ($j -match 'WT-STUB -w 0 new-tab .*Start-InTab\.ps1')
+    Check 'F name'            ($env:OMP_START_NAME -eq 'epsilon')
+    Check 'F prompt'          ($env:OMP_START_PROMPT -eq 'hi there')
+    Check 'F fresh env'       ($env:OMP_START_FRESH -eq '1')
+    Check 'F verbs env'       ($env:OMP_START_VERBS -match '"Verbs":\[\]')
+    Check 'F agent env'       ($env:OMP_START_AGENT -eq 'omp')
     $out = & $__startFn -FromLauncher
-    Check 'F launcher fresh prompt' (($out -join ' ') -match '\[omp-stub\] args="hi there"')
+    $j = $out -join ' '
+    Check 'F launcher fresh prompt' (($j -match '\[omp-stub\] args="hi there"') -and -not ($j -match 'args=-c'))
+    Check 'F env cleared' ((-not $env:OMP_START_NAME) -and (-not $env:OMP_START_FRESH) -and (-not $env:OMP_START_VERBS))
+
+    Write-Host '=== F2: existing project handoff resumes ==='
+    $out = & $__startFn alpha
+    Check 'F2 not fresh' (-not $env:OMP_START_FRESH)
+    $out = & $__startFn -FromLauncher
+    Check 'F2 resumes' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
 
     Write-Host '=== G: root escape rejected ==='
     try { & $__startFn ..\evil -Here; Check 'G reject' $false } catch { Check 'G reject' $true }
@@ -111,13 +120,15 @@ try {
     Write-Host '=== K: yolo rides the tab handoff ==='
     $out = & $__startFn kappa go -yolo
     $j = $out -join ' '
-    Check 'K handed off'   ($j -match 'WT-STUB')
+    Check 'K handed off'   ($j -match 'WT-STUB -w 0 new-tab')
     Check 'K env yolo'     ($env:OMP_START_YOLO -eq '1')
     Check 'K env agent'    ($env:OMP_START_AGENT -eq 'omp')
-    $env:OMP_START_NAME = 'kappa'; $env:OMP_START_PROMPT = 'go'; $env:OMP_START_YOLO = '1'; $env:OMP_START_AGENT = 'omp'
+    Check 'K env fresh'    ($env:OMP_START_FRESH -eq '1')
+    Check 'K env verbs'    ($env:OMP_START_VERBS -match '"Name":"yolo"')
     $out = & $__startFn -FromLauncher
-    Check 'K resume+yolo+prompt' (($out -join ' ') -match '\[omp-stub\] args=-c --approval-mode yolo go')
-    Check 'K env cleared' ((-not $env:OMP_START_NAME) -and (-not $env:OMP_START_YOLO))
+    $j = $out -join ' '
+    Check 'K fresh+yolo+prompt' (($j -match '\[omp-stub\] args=--approval-mode yolo go') -and -not ($j -match 'args=-c'))
+    Check 'K env cleared' ((-not $env:OMP_START_NAME) -and (-not $env:OMP_START_YOLO) -and (-not $env:OMP_START_FRESH) -and (-not $env:OMP_START_VERBS))
 
     Write-Host '=== L: default agent persisted and honored ==='
     & $__startFn -SetDefaultAgent claude
@@ -177,7 +188,7 @@ try {
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_STARTER_DIR_WIN -ErrorAction SilentlyContinue
+    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS, Env:OMP_STARTER_DIR_WIN, Env:OMP_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 

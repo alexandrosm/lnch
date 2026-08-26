@@ -8,7 +8,7 @@ One word from any shell to a running AI coding agent inside a fresh, git-initial
 start my-app build a snake game
 ```
 
-creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new Windows Terminal tab**, and launches your agent with `build a snake game` as its initial prompt.
+creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the current Windows Terminal window**, and launches your agent with `build a snake game` as its initial prompt.
 
 ## Install
 
@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.project-starter\bootstrap.ps1 -Version v0.5.1   # after initial install
+& ~\.project-starter\bootstrap.ps1 -Version v0.5.2   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -142,7 +142,7 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (34 checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # expanded engine matrix
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
 

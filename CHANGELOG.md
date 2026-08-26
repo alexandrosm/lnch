@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.2
+
+- Fresh-project tab handoffs preserve first-session state, so the child launches the agent normally instead of incorrectly adding resume flags (`omp -c`) before a session exists.
+- Capability verbs survive the terminal handoff via a structured JSON payload; `-Yolo`/`:yolo` deduplicate correctly.
+- Windows Terminal launches target the current window (`wt -w 0 new-tab`) instead of spawning a separate window; failure falls back inline.
+
 ## v0.5.1
 
 - New projects are seeded with **AGENTS.md** (the cross-harness instruction standard: overview / build & test / code style / security notes) plus `CLAUDE.md` (`@AGENTS.md` import) and `GEMINI.md` pointers.

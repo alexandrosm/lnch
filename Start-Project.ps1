@@ -36,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.5.1'
+$script:StarterVersion = '0.5.2'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -200,9 +200,14 @@ function script:Get-StarterUpdateNoticeState {
 
 function global:Show-StarterUpdateNotice {
     $latest = Get-StarterUpdateNoticeState
-    if ($latest -and ($latest.TrimStart('v') -ne $script:StarterVersion)) {
-        Write-Host ("update available: {0} (installed v{1}) - rerun the install one-liner from the README" -f $latest, $script:StarterVersion)
-    }
+    if (-not $latest) { return }
+    try {
+        $latestVersion = [version]$latest.TrimStart('v')
+        $currentVersion = [version]$script:StarterVersion
+        if ($latestVersion -gt $currentVersion) {
+            Write-Host ("update available: {0} (installed v{1}) - rerun the install one-liner from the README" -f $latest, $script:StarterVersion)
+        }
+    } catch { }
 }
 
 function global:Get-ProjectAgent {
@@ -393,12 +398,14 @@ function global:start {
 
     if ($FromLauncher) {
         # relaunched inside the new tab; state travels via inherited env vars
-        $Name          = $env:OMP_START_NAME
-        $raw           = $env:OMP_START_PROMPT
-        $Prompt        = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
-        $yoloWanted    = ($env:OMP_START_YOLO -eq '1')
-        $launcherAgent = $env:OMP_START_AGENT
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
+        $Name             = $env:OMP_START_NAME
+        $raw              = $env:OMP_START_PROMPT
+        $Prompt           = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
+        $yoloWanted       = ($env:OMP_START_YOLO -eq '1')
+        $launcherAgent    = $env:OMP_START_AGENT
+        $launcherFresh    = ($env:OMP_START_FRESH -eq '1')
+        $launcherVerbJson = $env:OMP_START_VERBS
+        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS -ErrorAction SilentlyContinue
     } else {
         Show-StarterUpdateNotice
     }
@@ -428,7 +435,19 @@ function global:start {
         $i++
     }
     $Prompt = @($kept)
-    if ($yoloWanted) { $verbs.Insert(0, [pscustomobject]@{ Name = 'yolo' }) }
+    if ($launcherVerbJson) {
+        try {
+            $restoredVerbPayload = $launcherVerbJson | ConvertFrom-Json
+            foreach ($launcherVerb in @($restoredVerbPayload.Verbs)) {
+                if ($launcherVerb) { $verbs.Add($launcherVerb) }
+            }
+        } catch {
+            Write-Warning "could not restore launcher capabilities: $_"
+        }
+    }
+    if ($yoloWanted -and -not ($verbs | Where-Object { $_.Name -eq 'yolo' })) {
+        $verbs.Insert(0, [pscustomobject]@{ Name = 'yolo' })
+    }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {
         $rootGuess = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
@@ -459,6 +478,9 @@ function global:start {
     }
 
     $isNew = -not (Test-Path -LiteralPath $dir)
+    # The parent creates the directory before launching a tab. Preserve whether
+    # this is the project's first session independently from filesystem existence.
+    $freshSession = $isNew -or ($FromLauncher -and $launcherFresh)
     if ($isNew) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Write-Host "created $dir"
@@ -511,7 +533,7 @@ function global:start {
     }
 
     # --- agent resolution -------------------------------------------------
-    if (-not $isNew) {
+    if (-not $freshSession) {
         $agent = Get-ProjectAgent -Dir $dir
     } else {
         $installed = @($script:AgentProfiles.Keys | Where-Object {
@@ -556,16 +578,20 @@ function global:start {
         $env:OMP_START_PROMPT = if ($Prompt) { $Prompt -join ' ' } else { '' }
         $env:OMP_START_YOLO   = if ($yoloWanted) { '1' } else { '' }
         $env:OMP_START_AGENT  = $agent
+        $env:OMP_START_FRESH  = if ($isNew) { '1' } else { '' }
+        $verbPayload = @()
+        foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
+        $env:OMP_START_VERBS = ConvertTo-Json -InputObject @{ Verbs = $verbPayload } -Depth 4 -Compress
         $sh = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
         $shellExe = if ($sh) { $sh.Source } else { Join-Path $PSHOME 'powershell.exe' }
         $launcher = Join-Path $script:StarterRoot 'Start-InTab.ps1'
-        & $wt.Source nt --title (Split-Path -Path $dir -Leaf) -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
+        & $wt.Source -w 0 new-tab --title (Split-Path -Path $dir -Leaf) -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
         if ($LASTEXITCODE -eq 0) {
             Write-Host "-> $(Split-Path -Path $dir -Leaf) opened in a new terminal tab"
             return
         }
         Write-Warning "wt exited with $($LASTEXITCODE); launching inline instead"
-        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
+        Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS -ErrorAction SilentlyContinue
     }
 
     Set-Location -LiteralPath $dir
@@ -579,7 +605,7 @@ function global:start {
 
     # --- apply capabilities ------------------------------------------------
     $p        = $script:AgentProfiles[$agent]
-    $resuming = -not $isNew
+    $resuming = -not $freshSession
     $agentArgs = @()
 
     $wantsPick = @($verbs | Where-Object { $_.Name -in @('pick', 'resume-pick') }).Count -gt 0

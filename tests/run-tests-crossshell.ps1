@@ -20,6 +20,7 @@ $gitCmd  = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git\cmd' } else
 $env:PATH = "$stubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerShell\v1.0;$env:PATH"
 
 # MSYS2 bash only: the WindowsApps bash.exe is a WSL launcher that drops
+$env:OMP_NO_UPDATE_CHECK = '1'
 # custom environment variables, breaking the env-injected fixture state.
 $bashExe = 'C:\Program Files\Git\bin\bash.exe'
 if (-not (Test-Path $bashExe)) {
@@ -136,7 +137,7 @@ try {
 
     Write-Host '=== F: tab handoff reaches wt stub ==='
     $out = BashRun 'start kappa go'
-    Check F-handoff (($out -match 'WT-STUB') -and ($out -match 'Start-InTab\.ps1'))
+    Check F-handoff (($out -match 'WT-STUB -w 0 new-tab') -and ($out -match 'Start-InTab\.ps1'))
 
     Write-Host '=== CMD: AutoRun lifecycle + start-cli.cmd ==='
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Starter 'install-cmd.ps1') | Out-Null
@@ -152,7 +153,7 @@ try {
     if ($null -ne $registryBackup) { Set-Content -LiteralPath $registryPath -Value $registryBackup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
     $cfgDir = $env:OMP_CONFIG_DIR
-    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_STARTER_DIR_WIN -ErrorAction SilentlyContinue
+    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_STARTER_DIR_WIN, Env:OMP_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
     if ($cfgDir) { Remove-Item -Recurse -Force $cfgDir -ErrorAction SilentlyContinue }
 }
 
