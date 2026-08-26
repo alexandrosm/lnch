@@ -28,6 +28,21 @@ if (-not $Version) {
 $tmpZip = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + ($Version -replace '[^A-Za-z0-9._-]', '') + '.zip')
 $tmpExt = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
+function Get-StarterFileSha256([string]$Path) {
+    # raw .NET hash: immune to cmdlet/module availability in stripped hosts
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 Write-Host "fetching project-starter $Version..."
 if ($Version -eq 'main') {
     Invoke-WebRequest -Uri "$repo/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing
@@ -41,7 +56,7 @@ if ($Version -eq 'main') {
         Select-Object -First 1
     if (-not $sumLine) { throw 'SHA256SUMS did not contain an entry for the archive' }
     $expected = ($sumLine -split '\s+')[0]
-    $actual = (Get-FileHash -LiteralPath $tmpZip -Algorithm SHA256).Hash
+    $actual = Get-StarterFileSha256 $tmpZip
     if ($actual -ne $expected) { throw "checksum mismatch: expected $expected got $actual" }
     Write-Host 'checksum verified'
     $innerPrefix = "project-starter-$Version"
