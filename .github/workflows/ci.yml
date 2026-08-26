@@ -29,6 +29,10 @@ jobs:
         shell: pwsh
         run: tests/run-tests-crossshell.ps1
 
+      - name: Tagged Bash bootstrap archive smoke
+        shell: bash
+        run: bash tests/run-tests-bootstrap.sh
+
       - name: Doctor smoke
         shell: pwsh
         run: |

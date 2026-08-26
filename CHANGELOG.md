@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.2
+
+- Tagged Bash installs extract from a private temporary directory, so they work from any current directory and match the release archive's root layout.
+- Release archives preserve LF line endings for every shell script.
+
 ## v1.0.1
 
 - Bash bootstrap checksum parsing no longer depends on `awk`; shell built-in `read` consumes `sha256sum`/SHA256SUMS output.

@@ -22,13 +22,15 @@ if [ -z "$VERSION" ]; then
     fi
 fi
 
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
 mkdir -p "$DEST"
 
 fetch_and_verify() {
-    curl -fsSL "$REPO/releases/download/$VERSION/lnch-$VERSION.zip" -o lnch.zip
-    curl -fsSL "$REPO/releases/download/$VERSION/SHA256SUMS" -o SHA256SUMS
-    IFS=' ' read -r expected _ < <(grep "lnch-$VERSION.zip" SHA256SUMS)
-    IFS=' ' read -r actual _ < <(sha256sum lnch.zip)
+    curl -fsSL "$REPO/releases/download/$VERSION/lnch-$VERSION.zip" -o "$WORK_DIR/lnch.zip"
+    curl -fsSL "$REPO/releases/download/$VERSION/SHA256SUMS" -o "$WORK_DIR/SHA256SUMS"
+    IFS=' ' read -r expected _ < <(grep "lnch-$VERSION.zip" "$WORK_DIR/SHA256SUMS")
+    IFS=' ' read -r actual _ < <(sha256sum "$WORK_DIR/lnch.zip")
     [ -n "$expected" ] || { echo 'SHA256SUMS missing archive entry'; exit 1; }
     [ "$actual" = "$expected" ] || { echo "checksum mismatch: expected $expected got $actual"; exit 1; }
     echo 'checksum verified'
@@ -49,8 +51,7 @@ else
     fetch_and_verify
     rm -rf "$DEST"
     mkdir -p "$DEST"
-    unzip -q lnch.zip && mv "lnch-$VERSION"/* "$DEST"/ && rmdir "lnch-$VERSION"
-    rm -f lnch.zip SHA256SUMS
+    unzip -q "$WORK_DIR/lnch.zip" -d "$DEST"
 fi
 
 bash "$DEST/install.sh"
