@@ -1,6 +1,6 @@
 # CLI shim entry: maps flat argv onto the `start` function.
 # Called by shell/start-cli.cmd (cmd doskey macro) and shell/start.sh (bash/zsh).
-# Flags: --yolo/-yolo, --here/-here, --doctor, --version, --agent <name>,
+# Flags: --yolo/-yolo, --here/-here, --doctor, --version/-v, --agent <name>,
 #        --default-agent <name|none>
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Start-Project.ps1')
