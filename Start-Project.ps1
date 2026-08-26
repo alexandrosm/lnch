@@ -10,6 +10,7 @@
 #   start -SetDefaultAgent <name>   persist the default agent ('' clears); used whenever
 #                              it is installed, before any picker would fire
 #   start -Doctor              audit dependencies, agents, config, hooks
+#   start -Version             print the engine version
 #
 #   Reopening an existing project auto-resumes with the agent that last ran there:
 #   recorded in .ps-project.json ({agent,intent,created,updated}), falling back to
@@ -30,6 +31,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$script:StarterVersion = '0.4.0'
 
 # agent -> how to continue / go fast. Verified flags first; best-effort profiles
 # (aider/opencode/qwen) intentionally carry empty or conservative values so a
@@ -45,7 +47,7 @@ $script:AgentProfiles = @{
     qwen     = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
 }
 
-function global:Get-StarterAgents {
+function global:Get-StarterAgentRegistry {
     $table = @{}
     foreach ($k in $script:AgentProfiles.Keys) { $table[$k] = $script:AgentProfiles[$k].Clone() }
     $registry = Join-Path $script:StarterRoot 'agents.json'
@@ -67,7 +69,7 @@ function global:Get-StarterAgents {
     $table
 }
 
-$script:AgentProfiles = Get-StarterAgents
+$script:AgentProfiles = Get-StarterAgentRegistry
 
 function global:Get-StarterConfigPath {
     if ($env:OMP_CONFIG_DIR) { return $env:OMP_CONFIG_DIR }
@@ -84,13 +86,45 @@ function global:Get-StarterDefaultAgent {
     $null
 }
 
-function global:Set-StarterDefaultAgent([string]$Agent) {
+function global:Set-StarterDefaultAgent {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Agent)
     $dir = Get-StarterConfigPath
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    @{ defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() } } |
-        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir 'config.json') -Encoding utf8
+    $p = Join-Path $dir 'config.json'
+    $payload = @{ defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() } }
+    if ($PSCmdlet.ShouldProcess($p, 'write default agent config')) {
+        $payload | ConvertTo-Json | Set-Content -LiteralPath $p -Encoding utf8
+    }
     if ([string]::IsNullOrWhiteSpace($Agent)) { Write-Host 'default agent cleared' }
     else { Write-Host "default agent set to '$($Agent.Trim())'" }
+}
+
+function script:Get-StarterUpdateNoticeState {
+    # returns latest release tag or $null; caches for 24h; never throws
+    if ($env:OMP_NO_UPDATE_CHECK) { return $null }
+    $cacheFile = Join-Path (Get-StarterConfigPath) 'update-cache.json'
+    if (Test-Path -LiteralPath $cacheFile) {
+        try {
+            $c = Get-Content -LiteralPath $cacheFile -Raw | ConvertFrom-Json
+            if (((Get-Date) - [datetime]$c.checked).TotalHours -lt 24) { return $c.latest }
+        } catch { }
+    }
+    $latest = $null
+    try {
+        $latest = (Invoke-RestMethod -Uri 'https://api.github.com/repos/alexandrosm/project-starter/releases/latest' `
+            -TimeoutSec 3 -Headers @{ 'User-Agent' = 'project-starter' }).tag_name
+        @{ latest = $latest; checked = (Get-Date).ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath $cacheFile -Encoding utf8
+    } catch { }
+    return $latest
+}
+
+function global:Show-StarterUpdateNotice {
+    $latest = Get-StarterUpdateNoticeState
+    if ($latest -and ($latest.TrimStart('v') -ne $script:StarterVersion)) {
+        Write-Host ("update available: {0} (installed v{1}) - rerun the install one-liner from the README" -f $latest, $script:StarterVersion)
+    }
 }
 
 function global:Get-ProjectAgent {
@@ -130,23 +164,21 @@ function global:Get-ProjectAgent {
 }
 
 function global:Write-ProjectMeta {
+    [CmdletBinding(SupportsShouldProcess)]
     param([string]$Dir, [string]$Agent, [string]$Intent)
     $path = Join-Path $Dir '.ps-project.json'
     $prev = $null
     if (Test-Path -LiteralPath $path) {
         try { $prev = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { }
     }
-    @{
-        agent   = $Agent
-        intent  = if ($Intent) { $Intent } elseif ($prev -and $prev.intent) { $prev.intent } else { $null }
-        created = if ($prev -and $prev.created) { $prev.created } else { (Get-Date).ToString('o') }
-        updated = (Get-Date).ToString('o')
-    } | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
-}
-
-function script:Limit-StarterText {
-    param([string]$Text, [int]$Max)
-    if ($Text -and $Text.Length -gt $Max) { $Text.Substring(0, $Max - 3) + '...' } else { $Text }
+    if ($PSCmdlet.ShouldProcess($path, 'write project metadata')) {
+        @{
+            agent   = $Agent
+            intent  = if ($Intent) { $Intent } elseif ($prev -and $prev.intent) { $prev.intent } else { $null }
+            created = if ($prev -and $prev.created) { $prev.created } else { (Get-Date).ToString('o') }
+            updated = (Get-Date).ToString('o')
+        } | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
+    }
 }
 
 function global:Select-StarterProject {
@@ -168,7 +200,9 @@ function global:Select-StarterProject {
         if (Test-Path -LiteralPath $metaPath) {
             try { $intent = (Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json).intent } catch { }
         }
-        '{0}  |  {1}' -f $d.Name, (Limit-StarterText $intent 48)
+        $shown = $intent
+        if ($shown -and $shown.Length -gt 48) { $shown = $shown.Substring(0, 45) + '...' }
+        '{0}  |  {1}' -f $d.Name, $shown
     }
 
     if ((@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
@@ -223,16 +257,21 @@ function global:start {
         [switch]$FromLauncher,
         [string]$Agent,
         [string]$SetDefaultAgent,
-        [switch]$Doctor
+        [switch]$Doctor,
+        [switch]$Version
     )
 
     # --- management modes ------------------------------------------------
+    if ($Version) {
+        Write-Output ("project-starter v{0}" -f $script:StarterVersion)
+        return
+    }
     if ($PSBoundParameters.ContainsKey('SetDefaultAgent')) {
         Set-StarterDefaultAgent -Agent $SetDefaultAgent
         return
     }
     if ($Doctor) {
-        Write-Host '== project-starter doctor =='
+        Write-Host ("== project-starter doctor (v{0}) ==" -f $script:StarterVersion)
         foreach ($tool in @('git', 'wt', 'fzf', 'pwsh', 'powershell')) {
             $c = @(Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
             if ($c) { Write-Host ("[ok] {0,-11} {1}" -f $tool, $c.Source) }
@@ -278,6 +317,8 @@ function global:start {
         $yoloWanted    = ($env:OMP_START_YOLO -eq '1')
         $launcherAgent = $env:OMP_START_AGENT
         Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT -ErrorAction SilentlyContinue
+    } else {
+        Show-StarterUpdateNotice
     }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {

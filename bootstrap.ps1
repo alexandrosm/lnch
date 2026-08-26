@@ -1,22 +1,56 @@
 # project-starter remote bootstrap for PowerShell / cmd boxes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <this-url> | iex"
-# Downloads the repo to ~\.project-starter, then wires up the PowerShell face
-# (and the bash face when an MSYS2/Git-bash is available). Idempotent.
+# Optional: -Version v0.3.0 pins a tagged release (default: latest release,
+# falling back to the main branch when the API is unreachable).
+# Tagged downloads are SHA256-verified against the release's SHA256SUMS.
+param([string]$Version = '')
+
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 $ProgressPreference = 'SilentlyContinue'
 
-$repo   = 'https://github.com/alexandrosm/project-starter'
-$zipUrl = "$repo/archive/refs/heads/main.zip"
-$dest   = Join-Path $HOME '.project-starter'
-$tmpZip = Join-Path ([IO.Path]::GetTempPath()) 'project-starter-main.zip'
+$repo    = 'https://github.com/alexandrosm/project-starter'
+$api     = 'https://api.github.com/repos/alexandrosm/project-starter'
+$dest    = Join-Path $HOME '.project-starter'
+$headers = @{ 'User-Agent' = 'project-starter-bootstrap' }
+
+if (-not $Version) {
+    Write-Host 'resolving latest release...'
+    try {
+        $Version = (Invoke-RestMethod -Uri "$api/releases/latest" -TimeoutSec 10 -Headers $headers).tag_name
+        Write-Host "latest release: $Version"
+    } catch {
+        Write-Warning 'could not reach the GitHub API; falling back to the main branch'
+        $Version = 'main'
+    }
+}
+
+$tmpZip = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + ($Version -replace '[^A-Za-z0-9._-]', '') + '.zip')
 $tmpExt = Join-Path ([IO.Path]::GetTempPath()) ('project-starter-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
-Write-Host 'fetching project-starter...'
-Invoke-WebRequest -Uri $zipUrl -OutFile $tmpZip -UseBasicParsing
+Write-Host "fetching project-starter $Version..."
+if ($Version -eq 'main') {
+    Invoke-WebRequest -Uri "$repo/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing
+    $innerPrefix = 'project-starter-main'
+} else {
+    Invoke-WebRequest -Uri "$repo/releases/download/$Version/project-starter-$Version.zip" -OutFile $tmpZip -UseBasicParsing
+    $sumsTxt = Join-Path ([IO.Path]::GetTempPath()) 'SHA256SUMS'
+    Invoke-WebRequest -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $sumsTxt -UseBasicParsing
+    $sumLine = (Get-Content $sumsTxt) |
+        Where-Object { $_ -match ('project-starter-' + [regex]::Escape($Version) + '\.zip') } |
+        Select-Object -First 1
+    if (-not $sumLine) { throw 'SHA256SUMS did not contain an entry for the archive' }
+    $expected = ($sumLine -split '\s+')[0]
+    $actual = (Get-FileHash -LiteralPath $tmpZip -Algorithm SHA256).Hash
+    if ($actual -ne $expected) { throw "checksum mismatch: expected $expected got $actual" }
+    Write-Host 'checksum verified'
+    $innerPrefix = "project-starter-$Version"
+}
+
 if (Test-Path $tmpExt) { Remove-Item $tmpExt -Recurse -Force }
 Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpExt -Force
-$unpacked = Join-Path $tmpExt 'project-starter-main'
+$unpacked = Join-Path $tmpExt $innerPrefix
+if (-not (Test-Path (Join-Path $unpacked 'Start-Project.ps1'))) { $unpacked = $tmpExt }
 
 if (Test-Path (Join-Path $dest '.git')) {
     Write-Host 'updating existing clone...'
@@ -39,7 +73,6 @@ if (-not (Test-Path $bashExe)) {
 if ($bashExe -and (Test-Path $bashExe)) {
     Write-Host ''
     Write-Host 'bash detected - wiring the bash/zsh face too:'
-    # convert to MSYS-style POSIX path: C:\foo -> /c/foo
     $drive = $dest.Substring(0, 1).ToLower()
     $rest  = $dest.Substring(3).Replace('\', '/')
     $posix = "/$drive/$rest"

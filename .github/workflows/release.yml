@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package tagged tree
+        shell: pwsh
+        run: |
+          $tag = ${env:GITHUB_REF_NAME}
+          $stage = "project-starter-$tag"
+          New-Item -ItemType Directory -Force -Path "staging/$stage" | Out-Null
+          Copy-Item -Path ./* -Destination "staging/$stage" -Recurse -Force
+          Remove-Item "staging/$stage/.git" -Recurse -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "staging/$stage" -DestinationPath "project-starter-$tag.zip" -Force
+          $hash = (Get-FileHash "project-starter-$tag.zip" -Algorithm SHA256).Hash
+          "$hash  project-starter-$tag.zip" | Set-Content SHA256SUMS
+
+      - name: Create release with assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = ${env:GITHUB_REF_NAME}
+          gh release create $tag "project-starter-$tag.zip" SHA256SUMS `
+            --title $tag --generate-notes --verify-tag

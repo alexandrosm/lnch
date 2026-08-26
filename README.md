@@ -126,3 +126,5 @@ pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.p
 ```
 
 CI runs both suites plus a remote-bootstrap smoke test on `windows-latest` for every push.
+
+Lint gate: PSScriptAnalyzer runs in CI (settings: `tests/PSScriptAnalyzerSettings.psd1`).

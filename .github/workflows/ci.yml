@@ -12,6 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lint (PSScriptAnalyzer)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $findings = Invoke-ScriptAnalyzer -Path . -Recurse -Settings tests/PSScriptAnalyzerSettings.psd1
+          $findings | Format-Table -AutoSize | Out-String | Write-Output
+          if ($findings | Where-Object Severity -eq 'Error') { exit 1 }
+
       - name: Engine matrix (Windows PowerShell 5.1)
         shell: powershell
         run: tests/run-tests.ps1
