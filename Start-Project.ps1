@@ -5,22 +5,25 @@
 #   start <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
 #                              extra words become the agent's initial prompt AND are saved
 #                              as the project's intent
-#   start <name> ... -Yolo     appends the agent's auto-approval flag (opt-in per run)
-#   start -Agent <name>        force the agent for a NEW project (skips picker/default)
-#   start -SetDefaultAgent <name>   persist the default agent ('' clears); used whenever
-#                              it is installed, before any picker would fire
-#   start -Doctor              audit dependencies, agents, config, hooks
-#   start -Version             print the engine version
+#   start <name> ... -Yolo     shorthand for the :yolo capability
+#
+#   CAPABILITY VERBS (leading :tokens - one vocabulary, every agent):
+#     :pick              resume, choosing among past sessions
+#     :plan :edits       approval ladder (where the agent supports it)
+#     :yolo              auto-approve everything
+#     :model <value>     pin the model for this session
+#   Verbs may appear anywhere among the prompt words. A verb an agent does not
+#   implement warns and is skipped - never a raw CLI error.
 #
 #   Reopening an existing project auto-resumes with the agent that last ran there:
 #   recorded in .ps-project.json ({agent,intent,created,updated}), falling back to
 #   .claude/.codex/.gemini fingerprints and omp's own session buckets.
 #
 #   AGENT REGISTRY: built-ins below; an optional agents.json next to this script
-#   merges over them. Per-agent keys:
-#     continueArgs           argv used to resume (array)
-#     takesPromptOnContinue  whether extra words may ride along on resume (bool)
-#     yoloFlags              argv appended by -Yolo (array; empty -> warns)
+#   merges over them. Two accepted shapes per agent:
+#     v2:  "caps": { "resume": {"args":["-c"]}, "mode:yolo": {"args":["--flag"]} }
+#          plus optional takesPromptOnResume
+#     v0.3 legacy: continueArgs / takesPromptOnContinue / yoloFlags (auto-migrated)
 #
 #   -Here   launch inline instead of a new tab.
 #   Root:   $env:OMP_PROJECTS_DIR (default C:\projects)
@@ -31,36 +34,97 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.4.0'
+$script:StarterVersion = '0.5.0'
+$script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
-# agent -> how to continue / go fast. Verified flags first; best-effort profiles
-# (aider/opencode/qwen) intentionally carry empty or conservative values so a
-# wrong guess warns instead of misbehaving.
+# Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
+# agents.json fills the gaps (that is the point of the tent).
 $script:AgentProfiles = @{
-    omp      = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--approval-mode', 'yolo') }
-    claude   = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--dangerously-skip-permissions') }
-    codex    = @{ ContinueArgs = @('resume', '--last'); TakesPromptOnContinue = $false; YoloFlags = @('--full-auto') }
-    gemini   = @{ ContinueArgs = @();                   TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
-    # best-effort profiles
-    aider    = @{ ContinueArgs = @('--resume');         TakesPromptOnContinue = $false; YoloFlags = @('--yes-always') }
-    opencode = @{ ContinueArgs = @('--continue');       TakesPromptOnContinue = $true;  YoloFlags = @() }
-    qwen     = @{ ContinueArgs = @('-c');               TakesPromptOnContinue = $true;  YoloFlags = @('--yolo') }
+    omp = @{
+        TakesPromptOnResume = $true
+        Caps                = @{
+            'resume'      = @{ Args = @('-c') }
+            'resume-pick' = @{ Args = @('-r') }
+            'mode:yolo'   = @{ Args = @('--approval-mode', 'yolo') }
+            'model'       = @{ Args = @('--model') }
+        }
+    }
+    claude = @{
+        TakesPromptOnResume = $true
+        Caps                = @{
+            'resume'      = @{ Args = @('-c') }
+            'resume-pick' = @{ Args = @('--resume') }
+            'mode:yolo'   = @{ Args = @('--dangerously-skip-permissions') }
+            'mode:plan'   = @{ Args = @('--permission-mode', 'plan') }
+            'mode:edits'  = @{ Args = @('--permission-mode', 'acceptEdits') }
+            'model'       = @{ Args = @('--model') }
+        }
+    }
+    codex = @{
+        TakesPromptOnResume = $false
+        Caps                = @{
+            'resume'      = @{ Args = @('resume', '--last') }
+            'resume-pick' = @{ Args = @('resume') }
+            'mode:yolo'   = @{ Args = @('--full-auto') }
+            'model'       = @{ Args = @('-m') }
+        }
+    }
+    gemini = @{
+        TakesPromptOnResume = $true
+        Caps                = @{}
+    }
+    aider = @{
+        TakesPromptOnResume = $false
+        Caps                = @{
+            'resume'    = @{ Args = @('--resume') }
+            'mode:yolo' = @{ Args = @('--yes-always') }
+            'model'     = @{ Args = @('--model') }
+        }
+    }
+    opencode = @{
+        TakesPromptOnResume = $true
+        Caps                = @{
+            'resume' = @{ Args = @('--continue') }
+        }
+    }
+    qwen = @{
+        TakesPromptOnResume = $true
+        Caps                = @{
+            'mode:yolo' = @{ Args = @('--yolo') }
+        }
+    }
 }
 
 function global:Get-StarterAgentRegistry {
+    # builtins -> overlay agents.json (v2 caps shape or v0.3 legacy shape)
     $table = @{}
-    foreach ($k in $script:AgentProfiles.Keys) { $table[$k] = $script:AgentProfiles[$k].Clone() }
+    foreach ($k in $script:AgentProfiles.Keys) {
+        $table[$k] = @{
+            TakesPromptOnResume = $script:AgentProfiles[$k].TakesPromptOnResume
+            Caps                = $script:AgentProfiles[$k].Caps
+        }
+    }
     $registry = Join-Path $script:StarterRoot 'agents.json'
     if (Test-Path -LiteralPath $registry) {
         try {
             $custom = Get-Content -LiteralPath $registry -Raw | ConvertFrom-Json
             foreach ($prop in $custom.PSObject.Properties) {
                 $e = $prop.Value
-                $table[$prop.Name] = @{
-                    ContinueArgs          = @(@($e.continueArgs) | Where-Object { $_ })
-                    TakesPromptOnContinue = if ($null -ne $e.takesPromptOnContinue) { [bool]$e.takesPromptOnContinue } else { $true }
-                    YoloFlags             = @(@($e.yoloFlags) | Where-Object { $_ })
+                if ($e.caps) {
+                    $caps = @{}
+                    foreach ($cp in $e.caps.PSObject.Properties) {
+                        $caps[$cp.Name] = @{ Args = @(@($cp.Value.args) | Where-Object { $_ }) }
+                    }
+                    $take = if ($null -ne $e.takesPromptOnResume) { [bool]$e.takesPromptOnResume } else { $true }
+                } else {
+                    # v0.3 legacy shape
+                    $caps = @{
+                        'resume'    = @{ Args = @(@($e.continueArgs) | Where-Object { $_ }) }
+                        'mode:yolo' = @{ Args = @(@($e.yoloFlags) | Where-Object { $_ }) }
+                    }
+                    $take = if ($null -ne $e.takesPromptOnContinue) { [bool]$e.takesPromptOnContinue } else { $true }
                 }
+                $table[$prop.Name] = @{ TakesPromptOnResume = $take; Caps = $caps }
             }
         } catch {
             Write-Warning "agents.json ignored (invalid JSON): $_"
@@ -277,13 +341,15 @@ function global:start {
             if ($c) { Write-Host ("[ok] {0,-11} {1}" -f $tool, $c.Source) }
             else { Write-Host ("[--] {0,-11} not found" -f $tool) }
         }
+        $verbs = @('resume', 'resume-pick', 'mode:yolo', 'mode:plan', 'model')
+        Write-Host ('{0,-9} {1}' -f 'agent', ($verbs -join '  '))
         foreach ($a in ($script:AgentProfiles.Keys | Sort-Object)) {
             $exe = @(Get-Command $a -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
-            $p = $script:AgentProfiles[$a]
-            $state = if (-not $exe) { 'not installed' }
-                     elseif ($p.YoloFlags.Count -eq 0) { 'installed; -Yolo will warn (no yoloFlags)' }
-                     else { 'ready' }
-            Write-Host ("[{0}] agent {1,-9} {2}" -f ($(if ($exe) { 'ok' } else { '--' })), $a, $state)
+            $cells = foreach ($v in $verbs) {
+                if ($script:AgentProfiles[$a].Caps.ContainsKey($v)) { ' yes' } else { '  - ' }
+            }
+            $tag = if ($exe) { 'ok' } else { '--' }
+            Write-Host ("[{0}] {1,-9} {2}" -f $tag, $a, ($cells -join ' '))
         }
         $rootNow = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
         try { $rootNow = [System.IO.Path]::GetFullPath($rootNow) } catch { }
@@ -320,6 +386,33 @@ function global:start {
     } else {
         Show-StarterUpdateNotice
     }
+
+    # --- extract known capability verbs from anywhere in the prompt -------
+    $verbs = New-Object System.Collections.Generic.List[object]
+    $kept  = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $Prompt.Count) {
+        $t = $Prompt[$i]
+        if ($t -like ':*') {
+            $v = $t.TrimStart(':').Trim()
+            if ($script:KnownVerbs -contains $v) {
+                if ($v -eq 'model') {
+                    if ($i + 1 -ge $Prompt.Count) { Write-Error ':model requires a value (e.g. :model opus)'; return }
+                    $i++
+                    $verbs.Add([pscustomobject]@{ Name = 'model'; Value = $Prompt[$i] })
+                    $i++
+                    continue
+                }
+                $verbs.Add([pscustomobject]@{ Name = $v })
+                $i++
+                continue
+            }
+        }
+        $kept.Add($t)
+        $i++
+    }
+    $Prompt = @($kept)
+    if ($yoloWanted) { $verbs.Insert(0, [pscustomobject]@{ Name = 'yolo' }) }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {
         $rootGuess = if ($env:OMP_PROJECTS_DIR) { $env:OMP_PROJECTS_DIR } else { 'C:\projects' }
@@ -402,7 +495,8 @@ function global:start {
             }
         }
     }
-    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
+    $intentWords = @(($Prompt | Where-Object { $_ -notlike ':*' }) + ($verbs | ForEach-Object { ':' + $_.Name })) -join ' '
+    Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($intentWords) { $intentWords } else { $null })
 
     # default: hand off to a fresh Windows Terminal tab
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
@@ -425,15 +519,35 @@ function global:start {
 
     Set-Location -LiteralPath $dir
 
+    # --- apply capabilities ------------------------------------------------
     $p        = $script:AgentProfiles[$agent]
     $resuming = -not $isNew
     $agentArgs = @()
-    if ($resuming) { $agentArgs += $p.ContinueArgs }
-    if ($yoloWanted) {
-        if ($p.YoloFlags.Count -gt 0) { $agentArgs += $p.YoloFlags }
-        else { Write-Warning "$agent has no yoloFlags registered; running with normal approvals" }
+
+    $wantsPick = @($verbs | Where-Object { $_.Name -in @('pick', 'resume-pick') }).Count -gt 0
+    if ($resuming -and -not $wantsPick) {
+        $rcap = $p.Caps['resume']
+        if ($rcap) { $agentArgs += $rcap.Args }
+        elseif ($p.Caps.Count -gt 0) { Write-Warning "$agent declares no resume capability; starting a fresh session" }
     }
-    if ($Prompt -and $resuming -and -not $p.TakesPromptOnContinue) {
+
+    foreach ($v in $verbs) {
+        $capKey = switch ($v.Name) {
+            'yolo'  { 'mode:yolo' }
+            'pick'  { 'resume-pick' }
+            default { $v.Name }
+        }
+        if ($capKey -in @('resume', 'resume-pick') -and -not $resuming) { continue }
+        $cap = $p.Caps[$capKey]
+        if (-not $cap) {
+            Write-Warning "$agent does not support :$($v.Name); skipping"
+            continue
+        }
+        $agentArgs += $cap.Args
+        if ($capKey -eq 'model') { $agentArgs += $v.Value }
+    }
+
+    if ($Prompt -and $resuming -and (-not $p.TakesPromptOnResume)) {
         Write-Warning "dropping prompt ('$($Prompt -join ' ')): cannot combine with $agent resume"
     } elseif ($Prompt) {
         $agentArgs += ($Prompt -join ' ')

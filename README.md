@@ -18,6 +18,12 @@ creates the project folder, runs `git init`, opens a **new Windows Terminal tab*
 irm https://raw.githubusercontent.com/alexandrosm/project-starter/main/bootstrap.ps1 | iex
 ```
 
+Pin a release and SHA256-verify it:
+
+```powershell
+& ~\.project-starter\bootstrap.ps1 -Version v0.5.0   # after initial install
+```
+
 **bash / zsh (Git Bash, WSL)** — one command:
 
 ```bash
@@ -40,7 +46,7 @@ All three download the repo to `~\.project-starter` and wire up that shell's fac
 | bash / zsh (Git Bash, WSL) | sourced shim | `--yolo` / `--here`; cwd not preserved after `--here` (child process) |
 | cmd.exe | doskey macro via HKCU AutoRun | **interactive sessions only** — scripted `cmd /c start ...` is untouched |
 
-All three drive one engine (`Start-Project.ps1`), so resume detection, the agent registry, metadata, and pickers behave identically everywhere.
+All three drive one engine (`Start-Project.ps1`), so resume detection, the capability registry, metadata, and pickers behave identically everywhere.
 
 ## Usage
 
@@ -49,17 +55,35 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the agent
 | `start` | Pick an existing project (fzf if installed, else numbered list); shows saved intent + last-active time |
 | `start <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
 | `start <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
+| `start <name> :<verb>` | Capability verbs (see below) — may appear anywhere among the words |
+| `start <name> ... -Yolo` / `--yolo` | Shorthand for `:yolo` |
+| `start <name> ... -Here` / `--here` | Launch in the current window instead of a new tab |
 | `start -Agent <name>` / `--agent` | Force the agent for a new project |
 | `start -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
-| `start ... -Yolo` / `--yolo` | Appends the agent's auto-approval flag (opt-in per invocation) |
-| `start ... -Here` / `--here` | Launch in the current window instead of a new tab |
-| `start -Doctor` / `--doctor` | Audit tools, agents, config, hooks |
+| `start -Version` / `--version` | Print engine version |
+| `start -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
 ### ⚠️ `-Yolo` safety
 
 `-Yolo` appends each agent's auto-approval flag (e.g. `--approval-mode yolo`, `--dangerously-skip-permissions`). The agent will then **execute commands without asking you**. It is opt-in per invocation by design — never the default — and its effect is limited to the session it flags.
+
+## Capabilities (the tent)
+
+One verb vocabulary, normalized across every agent. Each agent's registry entry declares which verbs it implements and how; unsupported combinations warn and degrade gracefully instead of surfacing raw CLI errors.
+
+| Verb | Meaning |
+|---|---|
+| `:pick` | Resume this project, choosing among past sessions |
+| `:yolo` | Auto-approve everything (same as `-Yolo`) |
+| `:plan` | Planning approvals where supported |
+| `:edits` | Auto-accept file edits only (Claude) |
+| `:model <value>` | Pin the model for this session |
+
+Example: `start my-app :plan sketch the API` — planning approvals on whatever agent owns `my-app`.
+
+`start -Doctor` renders the full capability matrix: every installed agent × every verb.
 
 ## Resume: how the agent is chosen
 
@@ -74,28 +98,25 @@ Known limits: Gemini CLI has no trustworthy resume flag, so it relaunches fresh;
 
 ## Agents
 
-Built-in registry: **omp, claude, codex, gemini, aider, opencode, qwen**. Flags marked best-effort carry conservative values (empty `yoloFlags` warns instead of guessing). An optional `agents.json` next to `Start-Project.ps1` merges over the built-ins:
+Built-in registry: **omp, claude, codex, gemini, aider, opencode, qwen**. An optional `agents.json` next to `Start-Project.ps1` merges over the built-ins using the v2 caps shape:
 
 ```json
 {
-  "aider": {
-    "continueArgs": ["--resume", "--last"],
-    "takesPromptOnContinue": false,
-    "yoloFlags": ["--yes-always"]
-  },
-  "omp": { "continueArgs": ["--continue"] }
+  "claude": {
+    "takesPromptOnResume": true,
+    "caps": {
+      "resume":      { "args": ["-c"] },
+      "resume-pick": { "args": ["--resume"] },
+      "mode:yolo":   { "args": ["--dangerously-skip-permissions"] },
+      "mode:plan":   { "args": ["--permission-mode", "plan"] }
+    }
+  }
 }
 ```
 
-| Key | Meaning | Default |
-|---|---|---|
-| `continueArgs` | argv used when resuming an existing project | `[]` |
-| `takesPromptOnContinue` | may extra words ride along on resume | `true` |
-| `yoloFlags` | argv appended by `-Yolo` | `[]` (warns) |
+v0.3-style entries (`continueArgs` / `yoloFlags` / `takesPromptOnContinue`) auto-migrate.
 
-Built-in yolo flags: omp `--approval-mode yolo`, claude `--dangerously-skip-permissions`, codex `--full-auto`, gemini/qwen `--yolo`, aider `--yes-always`.
-
-Run `start -Doctor` to see which agents resolve on your machine and which have complete profiles.
+Run `start -Doctor` for the live capability matrix on your machine.
 
 ## Per-project metadata
 
@@ -104,7 +125,7 @@ Run `start -Doctor` to see which agents resolve on your machine and which have c
 ```json
 {
   "agent": "omp",
-  "intent": "build a snake game",
+  "intent": ":yolo build a snake game",
   "created": "2026-08-23T10:00:00.0000000Z",
   "updated": "2026-08-23T12:30:00.0000000Z"
 }
@@ -121,10 +142,8 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (27 checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # engine matrix (30 checks)
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
 ```
 
-CI runs both suites plus a remote-bootstrap smoke test on `windows-latest` for every push.
-
-Lint gate: PSScriptAnalyzer runs in CI (settings: `tests/PSScriptAnalyzerSettings.psd1`).
+PSScriptAnalyzer gates every push (settings: `tests/PSScriptAnalyzerSettings.psd1`). CI runs everything on `windows-latest`; tag pushes are packaged into GitHub Releases with SHA256SUMS (`scripts/release-local.ps1` reproduces that locally).
