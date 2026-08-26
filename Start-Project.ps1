@@ -36,7 +36,7 @@ if (Get-Command start -CommandType Alias -ErrorAction SilentlyContinue) {
 }
 
 $script:StarterRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:StarterVersion = '0.5.4'
+$script:StarterVersion = '0.6.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -272,7 +272,26 @@ function global:Write-ProjectMeta {
     }
 }
 
-function global:Select-StarterProject {
+function global:ConvertFrom-StarterProjectSelection {
+    param([string]$Selection, [int]$Count)
+    if ([string]::IsNullOrWhiteSpace($Selection)) { return @() }
+    if ($Selection.Trim() -match '^(all|\*)$') { return @(1..$Count) }
+
+    $indexes = New-Object System.Collections.Generic.List[int]
+    foreach ($token in ($Selection -split '[,\s]+' | Where-Object { $_ })) {
+        if ($token -match '^(\d+)-(\d+)$') {
+            foreach ($n in ([int]$matches[1]..[int]$matches[2])) {
+                if ($n -ge 1 -and $n -le $Count -and -not $indexes.Contains($n)) { $indexes.Add($n) }
+            }
+        } elseif ($token -match '^\d+$') {
+            $n = [int]$token
+            if ($n -ge 1 -and $n -le $Count -and -not $indexes.Contains($n)) { $indexes.Add($n) }
+        }
+    }
+    return @($indexes)
+}
+
+function global:Select-StarterProjectSet {
     param([string]$Root)
     $dirs = @()
     if (Test-Path -LiteralPath $Root) {
@@ -281,7 +300,7 @@ function global:Select-StarterProject {
     if ($dirs.Count -eq 0) {
         Write-Host "no projects under $Root yet."
         Write-Host 'usage: start <name> [initial prompt...]'
-        return $null
+        return @()
     }
 
     # line format: "<name>  |  <intent>"; picking parses the name before the pipe
@@ -297,22 +316,17 @@ function global:Select-StarterProject {
     }
 
     if ((@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
-        $picked = $lines | fzf --height 40% --reverse
-        if ($LASTEXITCODE -eq 0 -and $picked) { return (($picked -split '\|')[0]).Trim() }
-        return $null
+        $picked = @($lines | fzf --multi --height 60% --reverse --prompt 'projects> ')
+        if ($LASTEXITCODE -ne 0) { return @() }
+        return @($picked | Where-Object { $_ } | ForEach-Object { (($_ -split '\|')[0]).Trim() })
     }
 
     for ($i = 0; $i -lt $dirs.Count; $i++) {
         ('{0,3}. {1}' -f ($i + 1), $lines[$i]) | Write-Host
     }
-    $answer = Read-Host 'project number (blank cancels)'
-    if ($answer -match '^\d+$') {
-        $n = [int]$answer
-        if ($n -ge 1 -and $n -le $dirs.Count) {
-            return (($lines[$n - 1] -split '\|')[0]).Trim()
-        }
-    }
-    $null
+    $answer = Read-Host 'project numbers (1,3-5 or all; blank cancels)'
+    $selectedIndexes = @(ConvertFrom-StarterProjectSelection -Selection $answer -Count $dirs.Count)
+    return @($selectedIndexes | ForEach-Object { (($lines[$_ - 1] -split '\|')[0]).Trim() })
 }
 
 function global:Select-StarterAgent {
@@ -464,8 +478,26 @@ function global:start {
     }
 
     if ([string]::IsNullOrWhiteSpace($Name)) {
-        $Name = Select-StarterProject -Root $rootFull
-        if (-not $Name) { return }
+        $selectedProjects = @(Select-StarterProjectSet -Root $rootFull)
+        if ($selectedProjects.Count -eq 0) { return }
+        if ($selectedProjects.Count -eq 1) {
+            $Name = $selectedProjects[0]
+        } else {
+            $forwardPrompt = @()
+            foreach ($selectedVerb in $verbs) {
+                $forwardPrompt += (':' + $selectedVerb.Name)
+                if ($selectedVerb.Name -eq 'model') { $forwardPrompt += $selectedVerb.Value }
+            }
+            $forwardPrompt += @($Prompt)
+            $startFn = ${function:start}
+            foreach ($selectedProject in $selectedProjects) {
+                $invoke = @{ Name = $selectedProject; Here = [bool]$Here }
+                if ($Agent) { $invoke.Agent = $Agent }
+                if ($forwardPrompt.Count -gt 0) { $invoke.Prompt = [string[]]$forwardPrompt }
+                & $startFn @invoke
+            }
+            return
+        }
     }
 
     if (-not (Test-Path -LiteralPath $rootFull)) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.0
+
+- Bare `start` is now a multi-project launcher: fzf uses `--multi` (`Tab` toggles, `Enter` accepts), and the numbered fallback accepts lists/ranges such as `1,3-5` or `all`.
+- Every selected project launches through the normal agent/resume path into its own same-window Windows Terminal tab.
+- Native and bash-face suites assert exact multi-tab fan-out; parser tests cover ranges, deduplication, and all-selection.
+
 ## v0.5.4
 
 - Windows Terminal tab titles are locked to the project folder name with `--title <project> --suppressApplicationTitle`, preventing shells/agents from overwriting them.

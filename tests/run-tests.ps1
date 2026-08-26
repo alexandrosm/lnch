@@ -80,6 +80,21 @@ try {
     Check 'E picked theta' (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'E intent saved' ((Meta 'theta') -match 'build a snake game')
 
+    Write-Host '=== E2: multi-project picker launches every selection ==='
+    $env:OMP_TEST_FZF_MULTI = '1'
+    $out = & $__startFn
+    Remove-Item Env:OMP_TEST_FZF_MULTI -ErrorAction SilentlyContinue
+    $j = $out -join ' '
+    Check 'E2 theta tab' ($j -match 'WT-STUB -w 0 new-tab --title theta ')
+    Check 'E2 alpha tab' ($j -match 'WT-STUB -w 0 new-tab --title alpha ')
+    Check 'E2 exactly two' ([regex]::Matches($j, 'WT-STUB').Count -eq 2)
+    Remove-Item Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS -ErrorAction SilentlyContinue
+
+    Write-Host '=== E3: numbered multi-range parser ==='
+    $indexes = @(ConvertFrom-StarterProjectSelection -Selection '1,3-4' -Count 5)
+    Check 'E3 range' (($indexes -join ',') -eq '1,3,4')
+    Check 'E3 all' ((@(ConvertFrom-StarterProjectSelection -Selection 'all' -Count 4) -join ',') -eq '1,2,3,4')
+
     Write-Host '=== F: new-tab handoff env contract ==='
     $out = & $__startFn epsilon hi there
     $j = $out -join ' '
@@ -211,7 +226,7 @@ try {
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS, Env:OMP_STARTER_DIR_WIN, Env:OMP_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
+    Remove-Item Env:OMP_PROJECTS_DIR, Env:OMP_CONFIG_DIR, Env:OMP_START_NAME, Env:OMP_START_PROMPT, Env:OMP_START_YOLO, Env:OMP_START_AGENT, Env:OMP_START_FRESH, Env:OMP_START_VERBS, Env:OMP_STARTER_DIR_WIN, Env:OMP_NO_UPDATE_CHECK, Env:OMP_TEST_FZF_MULTI -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 

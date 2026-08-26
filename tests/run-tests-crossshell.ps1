@@ -117,6 +117,14 @@ try {
     $out = BashRun 'start --here'
     Check E-picker (($out -match '\[omp-stub\]') -and ($out -match 'args=-c\b')) $out
 
+    Write-Host '=== E2: multi-project picker through bash face ==='
+    $env:OMP_TEST_FZF_MULTI = '1'
+    $out = BashRun 'start'
+    Remove-Item Env:OMP_TEST_FZF_MULTI -ErrorAction SilentlyContinue
+    Check E2-theta ($out -match 'WT-STUB -w 0 new-tab --title theta ') $out
+    Check E2-alpha ($out -match 'WT-STUB -w 0 new-tab --title alpha ') $out
+    Check E2-count ([regex]::Matches($out, 'WT-STUB').Count -eq 2) $out
+
     Write-Host '=== G: root escape rejected ==='
     BashRun 'start ../evil --here' *> $null
     Check G-reject ($LASTEXITCODE -ne 0)

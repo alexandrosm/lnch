@@ -52,7 +52,7 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the capab
 
 | Command | Behavior |
 |---|---|
-| `start` | Pick an existing project (fzf if installed, else numbered list); shows saved intent + last-active time |
+| `start` | Multi-select existing projects, then launch each in its own tab (fzf if installed, else numbered list) |
 | `start <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
 | `start <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
 | `start <name> :<verb>` | Capability verbs (see below) — may appear anywhere among the words |
@@ -63,6 +63,8 @@ All three drive one engine (`Start-Project.ps1`), so resume detection, the capab
 | `start -Version` / `--version` / `-v` | Print engine version |
 | `start -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 
+
+Bare `start` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; without fzf, enter selections such as `1,3-5` or `all`. Each selected project follows its normal agent/resume metadata and opens in its own tab in the current Windows Terminal window.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
 By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `start` (for example, from `D:\work`, `start api` creates `D:\work\projects\api`). Set `OMP_PROJECTS_DIR` to override that root explicitly.
@@ -145,7 +147,7 @@ Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirecte
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # expanded engine matrix
-pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (15 checks)
+pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (18 checks)
 ```
 
 PSScriptAnalyzer gates every push (settings: `tests/PSScriptAnalyzerSettings.psd1`). CI runs everything on `windows-latest`; tag pushes are packaged into GitHub Releases with SHA256SUMS (`scripts/release-local.ps1` reproduces that locally).
