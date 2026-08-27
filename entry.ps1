@@ -1,8 +1,8 @@
 # CLI shim entry: maps flat argv onto the `lnch` function.
 # Called by shell/lnch-cli.cmd (cmd doskey macro) and shell/lnch.sh (bash/zsh).
 # Flags: --yolo/-yolo, --here/-here, --doctor, --discover, --sessions,
-#        --transcript <agent:id>, --json, --version/-v, --agent <name>,
-#        --default-agent <name|none>
+#        --include-children, --transcript <agent:id>, --json, --version/-v,
+#        --agent <name>, --default-agent <name|none>
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Lnch.ps1')
 
@@ -11,6 +11,7 @@ $here = $false
 $doctor = $false
 $discover = $false
 $sessions = $false
+$includeChildren = $false
 $transcript = $null
 $json = $false
 $showVersion = $false
@@ -26,6 +27,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($a -match '^(-doctor|--doctor)$') { $doctor = $true }
     elseif ($a -match '^(-discover|--discover)$') { $discover = $true }
     elseif ($a -match '^(-sessions|--sessions)$') { $sessions = $true }
+    elseif ($a -match '^(-include-children|--include-children)$') { $includeChildren = $true }
     elseif ($a -match '^(-transcript|--transcript)$') {
         $i++
         if ($i -ge $args.Count) { Write-Error '--transcript requires a session reference'; exit 1 }
@@ -50,7 +52,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 if ($showVersion) { lnch -Version; return }
 if ($doctor) { lnch -Doctor; return }
 if ($discover) { lnch -Discover -Json:$json; return }
-if ($sessions) { lnch -Sessions -Name $name -Agent $agent -Json:$json; return }
+if ($sessions) { lnch -Sessions -Name $name -Agent $agent -IncludeChildren:$includeChildren -Json:$json; return }
 if ($transcript) { lnch -Transcript $transcript -Agent $agent -Json:$json; return }
 if ($setDef -ne '' -or ($setDef -eq '' -and $args -contains '--default-agent') -or $args -contains '-default-agent') {
     lnch -SetDefaultAgent $setDef

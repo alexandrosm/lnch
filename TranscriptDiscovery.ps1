@@ -370,7 +370,7 @@ function global:Get-LnchSessionTranscript {
         $prefix = $Reference.Substring(0, $colon)
         if ($script:BuiltInAgentNames -contains $prefix) { $agentFilter = $prefix; $nativeReference = $Reference.Substring($colon + 1) }
     }
-    $inventory = Get-LnchSessionInventory -Agent $(if ($agentFilter) { @($agentFilter) } else { $null })
+    $inventory = Get-LnchSessionInventory -Agent $(if ($agentFilter) { @($agentFilter) } else { $null }) -IncludeChildren
     $sessionMatches = @($inventory.Sessions | Where-Object {
         (-not $agentFilter -or $_.Agent -eq $agentFilter) -and
         ($_.Ref -eq $Reference -or $_.NativeId -eq $nativeReference -or $_.TranscriptPath -eq $Reference)

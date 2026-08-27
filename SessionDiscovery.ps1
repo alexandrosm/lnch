@@ -72,7 +72,11 @@ function script:New-LnchSessionMetadata {
         [string]$TranscriptPath,
         [string]$Source,
         [string]$ResumeCommand,
-        [string]$Confidence = 'verified'
+        [string]$Confidence = 'verified',
+        [ValidateSet('root', 'child')][string]$Kind = 'root',
+        [string]$AgentNickname,
+        [string]$AgentRole,
+        [string]$AgentPath
     )
     if (-not $NativeId) { $NativeId = [System.IO.Path]::GetFileNameWithoutExtension($TranscriptPath) }
     $project = ConvertTo-LnchProjectPath $ProjectPath
@@ -86,6 +90,11 @@ function script:New-LnchSessionMetadata {
         CreatedAt           = $(if ($CreatedAt) { (ConvertTo-LnchActivityTime $CreatedAt).ToString('o') } else { $null })
         UpdatedAt           = $(if ($UpdatedAt) { (ConvertTo-LnchActivityTime $UpdatedAt).ToString('o') } else { $null })
         ParentId            = $ParentId
+        Kind                = $Kind
+        AgentNickname       = $AgentNickname
+        AgentRole           = $AgentRole
+        AgentPath           = $AgentPath
+        ChildCount          = 0
         Model               = $Model
         Archived            = $Archived
         Active              = $Active
@@ -202,11 +211,15 @@ function script:Get-LnchCodexSessions {
                 $title = if ($titleRecord.payload.thread_name) { $titleRecord.payload.thread_name } else { Get-LnchFirstUserPreview 'codex' $records }
                 $created = if ($meta.timestamp) { $meta.timestamp } elseif ($meta.payload.timestamp) { $meta.payload.timestamp } else { $file.CreationTimeUtc }
                 $parent = if ($meta.payload.parent_thread_id) { $meta.payload.parent_thread_id } else { $meta.payload.forked_from_id }
+                $isChild = [bool]($meta.payload.parent_thread_id -or $meta.payload.agent_path -or $meta.payload.thread_source -eq 'subagent' -or $meta.payload.source.subagent)
+                $kind = if ($isChild) { 'child' } else { 'root' }
                 $archived = $directoryName -eq 'archived_sessions'
-                Add-LnchSessionMetadata $Sessions (New-LnchSessionMetadata 'codex' $meta.payload.id $meta.payload.cwd $title $created $file.LastWriteTimeUtc $parent $turn.payload.model $archived $null $file.FullName 'rollout-jsonl' "codex resume $($meta.payload.id)")
-            }
+                $source = if ($isChild) { 'child-rollout-jsonl' } else { 'rollout-jsonl' }
+                $metadata = New-LnchSessionMetadata -Agent codex -NativeId $meta.payload.id -ProjectPath $meta.payload.cwd -Title $title -CreatedAt $created -UpdatedAt $file.LastWriteTimeUtc -ParentId $parent -Model $turn.payload.model -Archived $archived -Active $null -TranscriptPath $file.FullName -Source $source -ResumeCommand "codex resume $($meta.payload.id)" -Kind $kind -AgentNickname $meta.payload.agent_nickname -AgentRole $meta.payload.agent_role -AgentPath $meta.payload.agent_path
+                Add-LnchSessionMetadata $Sessions $metadata
         }
     }
+}
 }
 
 function script:Get-LnchGeminiSessions {
@@ -330,7 +343,7 @@ function script:Get-LnchQwenSessions {
 
 function global:Get-LnchSessionInventory {
     [CmdletBinding()]
-    param([string]$Project, [string[]]$Agent, [switch]$Refresh)
+    param([string]$Project, [string[]]$Agent, [switch]$IncludeChildren, [switch]$Refresh)
     $cacheVariables = @(
         'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
         'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR', 'XDG_DATA_HOME',
@@ -361,6 +374,16 @@ function global:Get-LnchSessionInventory {
             }
         }
         $items = @($sessions.Values)
+        $childCounts = @{}
+        foreach ($session in @($items | Where-Object { $_.Kind -eq 'child' -and $_.ParentId })) {
+            $parentKey = "$($session.Agent)|$($session.ParentId)"
+            if (-not $childCounts.ContainsKey($parentKey)) { $childCounts[$parentKey] = 0 }
+            $childCounts[$parentKey]++
+        }
+        foreach ($session in $items) {
+            $sessionKey = "$($session.Agent)|$($session.NativeId)"
+            if ($childCounts.ContainsKey($sessionKey)) { $session.ChildCount = $childCounts[$sessionKey] }
+        }
         $script:LnchSessionInventoryCache = [pscustomobject]@{
             Key              = $cacheKey
             CreatedAt        = [datetime]::UtcNow
@@ -369,6 +392,7 @@ function global:Get-LnchSessionInventory {
         }
     }
     if ($Agent) { $items = @($items | Where-Object { $Agent -contains $_.Agent }) }
+    if (-not $IncludeChildren) { $items = @($items | Where-Object { $_.Kind -ne 'child' }) }
     if ($Project) {
         $matching = @($projectInventory.Projects | Where-Object {
             $_.Id -eq $Project -or $_.Path -eq $Project -or $_.Name -eq $Project
@@ -388,8 +412,8 @@ function global:Get-LnchSessionInventory {
 
 function global:Show-LnchSessions {
     [CmdletBinding()]
-    param([string]$Project, [string[]]$Agent, [switch]$Json)
-    $inventory = Get-LnchSessionInventory -Project $Project -Agent $Agent
+    param([string]$Project, [string[]]$Agent, [switch]$IncludeChildren, [switch]$Json)
+    $inventory = Get-LnchSessionInventory -Project $Project -Agent $Agent -IncludeChildren:$IncludeChildren
     if ($Json) { ConvertTo-Json -InputObject $inventory -Depth 8; return }
     Write-Host ("== lnch sessions ({0}) ==" -f $inventory.Sessions.Count)
     foreach ($session in $inventory.Sessions) {

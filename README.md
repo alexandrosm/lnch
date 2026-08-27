@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.3.0   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.3.1   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -66,7 +66,7 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 | `lnch -Discover` / `--discover` | Locate the executable and private datastore candidates for all seven built-in agents |
 | `lnch -Discover -Json` / `--discover --json` | Emit the versioned discovery document for automation |
-| `lnch -Sessions [-Name <project>] [-Agent <agent>] [-Json]` / `--sessions [project]` | List normalized native sessions across agents, optionally filtered by project or agent |
+| `lnch -Sessions [-Name <project>] [-Agent <agent>] [-IncludeChildren] [-Json]` / `--sessions [project] [--include-children]` | List normalized native sessions; child/subagent sessions are hidden by default |
 | `lnch -Transcript <agent:id> [-Json]` / `--transcript <agent:id>` | Explicitly decode one native transcript into the normalized event schema |
 
 
@@ -167,6 +167,15 @@ lnch --sessions
 lnch --sessions api --agent claude --json
 $sessions = Get-LnchSessionInventory
 ```
+
+The default catalog contains user-facing root sessions. Child/subagent threads remain attached through `ParentId`, `Kind: child`, agent metadata, and each root's `ChildCount`, but are shown only on request:
+
+```powershell
+lnch --sessions --agent codex --include-children
+$all = Get-LnchSessionInventory -Agent codex -IncludeChildren
+```
+
+This distinction matters for multi-agent runtimes: one user Codex session can spawn hundreds of internal worker threads, which are not independent user sessions.
 
 Level Three decodes one explicitly selected native transcript into ordered events: messages, reasoning summaries, tool calls/results, model changes, compaction, reset, and system boundaries. Every event retains source type/line and parent identity where available; unsupported native records become counted loss entries rather than disappearing silently.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.1
+
+- Fixed Codex session inflation by classifying spawned subagent threads as children, excluding them from default session/project counts, exposing parent/agent metadata and root `ChildCount`, and adding the explicit `--include-children` view.
+
 ## v1.3.0
 
 - Added Level Two unified session catalogs and Level Three explicit transcript normalization across all seven agents, including project reconciliation, native resume metadata, messages, reasoning, tool calls/results, model/compaction/reset events, provenance, loss accounting, CLI/PowerShell APIs, and short-lived read caching.

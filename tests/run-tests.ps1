@@ -302,6 +302,10 @@ try {
             (@{ type = 'response_item'; timestamp = '2026-08-26T00:02:03Z'; payload = @{ type = 'message'; role = 'assistant'; content = @(@{ type = 'output_text'; text = 'codex fixture answer' }) } } | ConvertTo-Json -Depth 8 -Compress),
             (@{ type = 'compacted'; timestamp = '2026-08-26T00:02:04Z'; payload = @{ message = 'codex fixture compacted' } } | ConvertTo-Json -Depth 5 -Compress)
         ) | Set-Content -LiteralPath (Join-Path $codexSessionStore 'rollout-codex-fixture.jsonl') -Encoding utf8
+        @(
+            (@{ type = 'session_meta'; timestamp = '2026-08-26T00:02:10Z'; payload = @{ id = 'codex-child-fixture'; cwd = $codexProject; parent_thread_id = 'codex-fixture'; forked_from_id = 'codex-fixture'; thread_source = 'subagent'; agent_path = '/root/reviewer'; agent_nickname = 'Reviewer' } } | ConvertTo-Json -Depth 8 -Compress),
+            (@{ type = 'response_item'; timestamp = '2026-08-26T00:02:11Z'; payload = @{ type = 'message'; role = 'assistant'; content = @(@{ type = 'output_text'; text = 'codex child answer' }) } } | ConvertTo-Json -Depth 8 -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $codexSessionStore 'rollout-codex-child-fixture.jsonl') -Encoding utf8
 
         $geminiStore = Join-Path $geminiBase '.gemini'
         $geminiRegistry = [ordered]@{ projects = [ordered]@{} }
@@ -387,6 +391,8 @@ try {
         $sharedWorkspace = $projectInventory.Projects | Where-Object Path -eq $sharedProject | Select-Object -First 1
         Check 'V shared reconciliation' ($sharedWorkspace -and @($sharedWorkspace.Agents | Where-Object { $_ -in @('omp', 'claude') }).Count -eq 2)
         Check 'V codex project' (@(($projectInventory.Agents | Where-Object Agent -eq 'codex').Projects | Where-Object Path -eq $codexProject).Count -eq 1)
+        $codexProjectEntry = ($projectInventory.Agents | Where-Object Agent -eq 'codex').Projects | Where-Object Path -eq $codexProject | Select-Object -First 1
+        Check 'V codex root project count' ($codexProjectEntry.SessionCount -eq 1 -and $codexProjectEntry.Sources -contains 'child-rollout-jsonl')
         Check 'V gemini project' (@(($projectInventory.Agents | Where-Object Agent -eq 'gemini').Projects | Where-Object Path -eq $geminiProject).Count -eq 1)
         Check 'V aider partial project' (@(($projectInventory.Agents | Where-Object Agent -eq 'aider').Projects | Where-Object Path -eq $aiderProject).Count -eq 1)
         Check 'V opencode project' (@(($projectInventory.Agents | Where-Object Agent -eq 'opencode').Projects | Where-Object Path -eq $openProject).Count -eq 1)
@@ -397,6 +403,15 @@ try {
         Check 'V session schema' ($sessionInventory.Schema -eq 1)
         Check 'V seven agent sessions' (@($fixtureSessions.Agent | Sort-Object -Unique).Count -eq 7)
         Check 'V session project IDs' (@($fixtureSessions | Where-Object { $_.ProjectId -like 'workspace:*' }).Count -eq 7)
+        $codexAllSessions = Get-LnchSessionInventory -Agent codex -IncludeChildren -Refresh
+        $codexFixtureSessions = @($codexAllSessions.Sessions | Where-Object ProjectPath -eq $codexProject)
+        $codexRootSession = $codexFixtureSessions | Where-Object NativeId -eq 'codex-fixture' | Select-Object -First 1
+        $codexChildSession = $codexFixtureSessions | Where-Object NativeId -eq 'codex-child-fixture' | Select-Object -First 1
+        Check 'V codex children excluded default' (@($fixtureSessions | Where-Object Agent -eq 'codex').Count -eq 1)
+        Check 'V codex child classified' ($codexFixtureSessions.Count -eq 2 -and $codexChildSession.Kind -eq 'child' -and $codexChildSession.ParentId -eq 'codex-fixture')
+        Check 'V codex child count' ($codexRootSession.Kind -eq 'root' -and $codexRootSession.ChildCount -eq 1)
+        $codexChildTranscript = Get-LnchSessionTranscript -Reference 'codex:codex-child-fixture'
+        Check 'V codex child transcript' ($codexChildTranscript.Stats.Messages -eq 1)
 
         foreach ($fixtureAgent in @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')) {
             $fixtureSession = $fixtureSessions | Where-Object Agent -eq $fixtureAgent | Select-Object -First 1
@@ -412,6 +427,10 @@ try {
         $sessionJson = $null
         try { $sessionJson = (($sessionJsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
         Check 'V entry session JSON' ($sessionJson -and $sessionJson.Schema -eq 1 -and @($sessionJson.Sessions).Count -ge 7)
+        $childSessionJsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --sessions --agent codex --include-children --json 2>&1
+        $childSessionJson = $null
+        try { $childSessionJson = (($childSessionJsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
+        Check 'V entry child sessions' ($childSessionJson -and @($childSessionJson.Sessions | Where-Object Kind -eq 'child').Count -eq 1)
         $transcriptJsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --transcript omp:omp-fixture --json 2>&1
         $transcriptJson = $null
         try { $transcriptJson = (($transcriptJsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }

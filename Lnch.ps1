@@ -30,11 +30,12 @@
 #   -Here   launch inline instead of a new tab.
 #   Root:   $env:LNCH_PROJECTS_DIR, otherwise <current working directory>\projects
 #   Config: %APPDATA%\lnch\config.json (override dir: $env:LNCH_CONFIG_DIR)
-#   Discover: --discover [--json], --sessions [project] [--json],
+#   Discover: --discover [--json],
+#             --sessions [project] [--include-children] [--json],
 #             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.3.0'
+$script:LnchVersion = '1.3.1'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
@@ -517,6 +518,7 @@ function global:lnch {
         [switch]$Doctor,
         [switch]$Discover,
         [switch]$Sessions,
+        [switch]$IncludeChildren,
         [string]$Transcript,
         [switch]$Json,
         [switch]$Version
@@ -532,7 +534,7 @@ function global:lnch {
         return
     }
     if ($Sessions) {
-        Show-LnchSessions -Project $Name -Agent $(if ($Agent) { @($Agent) } else { $null }) -Json:$Json
+        Show-LnchSessions -Project $Name -Agent $(if ($Agent) { @($Agent) } else { $null }) -IncludeChildren:$IncludeChildren -Json:$Json
         return
     }
     if ($Transcript) {

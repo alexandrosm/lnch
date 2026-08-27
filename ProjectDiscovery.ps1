@@ -161,7 +161,8 @@ function script:Read-LnchProjectJsonlHeader {
                 }
                 'codex' {
                     if ($record.type -eq 'session_meta' -and $record.payload -and $record.payload.cwd) {
-                        return [pscustomobject]@{ Path = [string]$record.payload.cwd; Id = [string]$record.payload.id }
+                        $isChild = [bool]($record.payload.parent_thread_id -or $record.payload.agent_path -or $record.payload.thread_source -eq 'subagent' -or $record.payload.source.subagent)
+                        return [pscustomobject]@{ Path = [string]$record.payload.cwd; Id = [string]$record.payload.id; IsChild = $isChild }
                     }
                 }
                 'qwen' {
@@ -192,7 +193,10 @@ function script:Add-LnchJsonlProjectEvidence {
         $header = Read-LnchProjectJsonlHeader -Agent $Agent -Path $file.FullName
         if ($header -and $header.Path) {
             $key = if ($NativeKey) { $NativeKey } elseif ($header.Id) { $header.Id } else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
-            Add-LnchAgentProject $Projects $header.Path $key $Source 1 $file.LastWriteTimeUtc 'verified'
+            $count = if ($Agent -eq 'codex' -and $header.IsChild) { 0 } else { 1 }
+            $evidenceSource = if ($Agent -eq 'codex' -and $header.IsChild) { 'child-rollout-jsonl' } else { $Source }
+            $confidence = if ($count -eq 0) { 'inferred' } else { 'verified' }
+            Add-LnchAgentProject $Projects $header.Path $key $evidenceSource $count $file.LastWriteTimeUtc $confidence
             $resolved++
         }
     }
