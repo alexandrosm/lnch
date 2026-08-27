@@ -63,9 +63,10 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Agent <name>` / `--agent` | Force the agent for a new project |
 | `lnch -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
 | `lnch <name> -TerminalMode <mode>` / `--terminal <mode>` | Choose `tab`, `split-right`, `split-down`, `new-window`, or `inline` |
+| `lnch <name> -TerminalBackend <backend>` / `--backend <backend>` | Choose `auto`, `wt`, `agentterm`, or `inline` |
 | `lnch <name> -TerminalWindow <target>` / `--window <target>` | Target `last`, `new`, the shared `lnch` window, a stable per-`project` window, or a custom Windows Terminal window name/ID |
 | `--profile`, `--title-template`, `--tab-color`, `--color-scheme` | Override terminal presentation for one launch |
-| `lnch -Tabs [-Prune] [-Json]` / `lnch --tabs [--prune] [--json]` | Inspect the child-process/Windows Terminal runtime ledger |
+| `lnch -Tabs [-Prune] [-Json]` / `lnch --tabs [--prune] [--json]` | Inspect the child-process and terminal-identity runtime ledger |
 | `lnch -Version` / `--version` / `-v` | Print engine version |
 | `lnch -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 | `lnch -Discover` / `--discover` | Locate the executable and private datastore candidates for all seven built-in agents |
@@ -74,7 +75,7 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Transcript <agent:id> [-Json]` / `--transcript <agent:id>` | Explicitly decode one native transcript into the normalized event schema |
 
 
-Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata. Compatible targets are submitted to `wt.exe` as one semicolon-delimited batch instead of one process per project.
+Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata. Windows Terminal batches compatible targets into one semicolon-delimited `wt.exe` invocation; AgentTerm creates stable managed tabs through its authenticated control API.
 
 ### Project picker UI
 
@@ -91,16 +92,17 @@ Without fzf, bare `lnch` opens a full-screen multi-select TUI with project name,
 With fzf, the launcher enables rounded borders, multi-select, inline status, selection markers, and `Ctrl-A`/`Ctrl-D` all/none bindings. Set `LNCH_NO_FZF=1` to force the built-in TUI.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
-By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly. The resolved root is captured before a Windows Terminal handoff and reused inside the child tab; changing the child tab's working directory never creates a recursive `<project>\projects\<project>` path.
+By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly. The resolved root is captured before any terminal handoff and reused inside the child process; changing the terminal's working directory never creates a recursive `<project>\projects\<project>` path.
 
-## Windows Terminal policy and lifecycle
+## Terminal backends and lifecycle
 
-`lnch` treats Windows Terminal as a transport adapter rather than an implicit shell side effect. Parent and child exchange a schema-versioned JSON envelope under `%LOCALAPPDATA%\lnch\runtime\launches` (override with `LNCH_RUNTIME_DIR`); the child consumes that file, verifies the exact project directory, and publishes lifecycle receipts under `runtime\sessions`. Prompt arrays, capability verbs, resolved root, selected agent, launch policy, and a unique launch ID therefore survive spaces, Unicode, and concurrent launches without process-global `LNCH_NAME`/`LNCH_PROMPT` variables.
+`lnch` treats terminal hosts as replaceable transport adapters. Parent and child exchange a schema-versioned JSON envelope under `%LOCALAPPDATA%\lnch\runtime\launches` (override with `LNCH_RUNTIME_DIR`); the child consumes that file, verifies the exact project directory, and publishes lifecycle receipts under `runtime\sessions`. Prompt arrays, capability verbs, resolved root, selected agent, launch policy, and a unique launch ID therefore survive spaces, Unicode, and concurrent launches without process-global `LNCH_NAME`/`LNCH_PROMPT` variables.
 
 Per-launch PowerShell parameters and their bash/cmd long flags:
 
 | Policy | Values |
 |---|---|
+| `-TerminalBackend` / `--backend` | `auto` (default), `wt`, `agentterm`, `inline` |
 | `-TerminalMode` / `--terminal` | `tab` (default), `split-right`, `split-down`, `new-window`, `inline` |
 | `-TerminalWindow` / `--window` | `last` (default), `new`, `lnch`, `project`, or a custom Windows Terminal name/integer ID |
 | `-TerminalProfile` / `--profile` | `current` (default; uses `WT_PROFILE_ID`), `default`, profile name, or GUID |
@@ -108,6 +110,9 @@ Per-launch PowerShell parameters and their bash/cmd long flags:
 | `-TabColor` / `--tab-color` | `#RGB` or `#RRGGBB` |
 | `-ColorScheme` / `--color-scheme` | Existing Windows Terminal color-scheme name |
 | `-ReadinessTimeoutMs` / `--readiness-timeout` | Child receipt timeout, `0`–`60000` ms; default `5000` |
+| `-AgentTermPath` / `--agentterm-path` | Explicit `agentterm.exe`; `LNCH_AGENTTERM_PATH` is the environment override |
+| `-AgentTermHome` / `--agentterm-home` | AgentTerm state root; defaults to `AGENTTERM_HOME`, then `%USERPROFILE%` |
+| `-AgentTermPort` / `--agentterm-port` | AgentTerm control port; default `7685` |
 
 Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values win:
 
@@ -115,6 +120,7 @@ Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values
 {
   "defaultAgent": "omp",
   "terminal": {
+    "backend": "auto",
     "mode": "tab",
     "window": "last",
     "profile": "current",
@@ -125,14 +131,19 @@ Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values
       "codex": "#10A37F"
     },
     "colorScheme": "Campbell",
+    "agentTermPath": "C:\\tools\\AgentTerm\\agentterm.exe",
+    "agentTermHome": "C:\\agentterm-state",
+    "agentTermPort": 7685,
     "readinessTimeoutMs": 5000
   }
 }
 ```
 
-New-tab actions pass `--inheritEnvironment` explicitly. Split-pane actions use Windows Terminal's split command contract, which does not expose that flag. `lnch` waits for a child receipt before reporting a launch ready; an accepted command with no receipt produces a warning containing the launch ID instead of a false success.
+With `backend: auto`, an already-running AgentTerm instance wins; otherwise Windows Terminal is preferred, then an installed AgentTerm, then inline fallback. An explicit backend never silently impersonates unsupported behavior. AgentTerm currently supports managed `tab` mode; Windows Terminal supplies tab, split, and new-window modes.
 
-`lnch --tabs` maps project, agent, child PID, `WT_SESSION`, launch ID, window target, mode, and lifecycle state. `--prune` removes old exited/stale receipts. The [Windows Terminal CLI](https://learn.microsoft.com/windows/terminal/command-line-arguments) exposes `focus-tab` only by volatile numeric index and no public tab-identity enumeration API, so `lnch` deliberately does not claim it can refocus a logical project tab.
+Windows Terminal new-tab actions pass `--inheritEnvironment` explicitly. Split-pane actions use Windows Terminal's split command contract, which does not expose that flag. AgentTerm launches use its loopback-only bearer-authenticated API and record the returned stable tab ID, session UUID, and shell PID before submitting the child command. `lnch` waits for a child receipt before reporting a launch ready; an accepted command with no receipt produces a warning containing the launch ID instead of a false success.
+
+`lnch --tabs` maps project, agent, child PID, terminal backend, backend-specific identity, `WT_SESSION` where applicable, launch ID, window target, mode, and lifecycle state. `--prune` removes old exited/stale receipts. The [Windows Terminal CLI](https://learn.microsoft.com/windows/terminal/command-line-arguments) exposes `focus-tab` only by volatile numeric index; AgentTerm exposes stable tab and session identities through its control plane.
 
 ### ⚠️ `-Yolo` safety
 
@@ -254,7 +265,7 @@ User config lives in `%APPDATA%\lnch\config.json`:
 
 ## Requirements
 
-Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for managed tab/pane/window launches (otherwise `lnch` falls back inline), `fzf` for the picker, Git Bash for the bash shim, any agent executables you register.
+Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) or AgentTerm for managed terminal launches (otherwise `lnch` falls back inline), `fzf` for the picker, Git Bash for the bash shim, and any agent executables you register.
 
 ## Development
 
@@ -265,8 +276,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-terminal.ps1
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1
 pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-installed.ps1 -InstallDir .
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-smoke-agentterm-live.ps1 -AgentTermPath C:\path\to\agentterm.exe
 ```
 
-The installed journey starts from a missing config directory, launches existing and fresh projects through real child PowerShell processes, and checks dynamic/explicit roots, spaces and Unicode, terminal policy arguments, envelope consumption, readiness/exit receipts, the public ledger, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install. On an interactive Windows desktop, `tests\run-smoke-terminal-live.ps1` additionally opens a short-lived real `wt.exe` window and verifies its child lifecycle end to end.
+The installed journey starts from a missing config directory, launches existing and fresh projects through real child PowerShell processes, and checks dynamic/explicit roots, spaces and Unicode, terminal policy arguments, envelope consumption, readiness/exit receipts, the public ledger, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install. On an interactive Windows desktop, `tests\run-smoke-terminal-live.ps1` exercises real `wt.exe`, while `tests\run-smoke-agentterm-live.ps1` verifies the AgentTerm API, stable identities, cwd, prompt, envelope, and receipt lifecycle.
 
 PSScriptAnalyzer gates every push (settings: `tests/PSScriptAnalyzerSettings.psd1`). CI runs everything on `windows-latest`; tag pushes are packaged into GitHub Releases with SHA256SUMS (`scripts/release-local.ps1` reproduces that locally).

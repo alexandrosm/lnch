@@ -149,7 +149,7 @@ try {
 
     Write-Host '=== F: terminal policy flags reach wt stub ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $out = BashRun 'lnch kappa go --terminal split-right --window lnch --profile OmpProfile --title-template {project}-{agent} --tab-color \#ABC --color-scheme Campbell --readiness-timeout 0'
+    $out = BashRun 'lnch kappa go --backend wt --terminal split-right --window lnch --profile OmpProfile --title-template {project}-{agent} --tab-color \#ABC --color-scheme Campbell --readiness-timeout 0'
     $wtOut = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
     Check F-handoff (($wtOut -match '--window lnch split-pane --vertical') -and ($wtOut -match '--profile OmpProfile') -and ($wtOut -match '--title kappa-omp') -and ($wtOut -match '--tabColor #ABC') -and ($wtOut -match '--colorScheme Campbell') -and ($wtOut -match 'Lnch-InTab\.ps1')) $wtOut
     $out = BashRun 'lnch --tabs --json'

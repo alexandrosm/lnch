@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added AgentTerm as a managed terminal backend with `auto`/`wt`/`agentterm`/`inline` selection, bearer-authenticated tab creation, stable tab/session/process identities, startup command handoff, existing-instance reuse, multi-project tab launches, and backend-aware runtime receipts.
+- Added a real AgentTerm end-to-end smoke covering cwd, prompt, launch-envelope consumption, child readiness/exit, and identity agreement between lnch and AgentTerm.
+
 ## v1.4.0
 
 - Replaced ad hoc new-tab environment variables with a dedicated Windows Terminal adapter and schema-versioned, per-launch JSON envelopes. Prompts, capability verbs, agent choice, resolved roots, and concurrent launches now cross the parent/child boundary without shared mutable variables.

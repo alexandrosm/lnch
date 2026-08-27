@@ -50,6 +50,7 @@ chmod +x "$WORK/bin/curl"
 
 test -f "$WORK/home/.lnch/Lnch.ps1"
 test -f "$WORK/home/.lnch/WindowsTerminal.ps1"
+test -f "$WORK/home/.lnch/AgentTerm.ps1"
 test -f "$WORK/home/.lnch/shell/lnch.sh"
 test ! -e "$WORK/run/.github"
 HOME="$WORK/home" bash -c 'source "$HOME/.bashrc"; declare -F lnch >/dev/null'

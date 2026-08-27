@@ -42,6 +42,7 @@ $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'open
 . (Join-Path $script:LnchRoot 'ProjectDiscovery.ps1')
 . (Join-Path $script:LnchRoot 'SessionDiscovery.ps1')
 . (Join-Path $script:LnchRoot 'WindowsTerminal.ps1')
+. (Join-Path $script:LnchRoot 'AgentTerm.ps1')
 . (Join-Path $script:LnchRoot 'TranscriptDiscovery.ps1')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -543,11 +544,15 @@ function global:lnch {
         [switch]$Tabs,
         [switch]$Prune,
         [string]$TerminalMode,
+        [string]$TerminalBackend,
         [string]$TerminalWindow,
         [string]$TerminalProfile,
         [string]$TerminalTitle,
         [string]$TabColor,
         [string]$ColorScheme,
+        [string]$AgentTermPath,
+        [string]$AgentTermHome,
+        [Nullable[int]]$AgentTermPort,
         [Nullable[int]]$ReadinessTimeoutMs,
         [switch]$Json,
         [switch]$Version
@@ -707,21 +712,25 @@ function global:lnch {
                 if ($forwardPrompt.Count -gt 0) { $invoke.Prompt = [string[]]$forwardPrompt }
                 foreach ($override in @(
                     @{ Key = 'TerminalMode'; Value = $TerminalMode },
+                    @{ Key = 'TerminalBackend'; Value = $TerminalBackend },
                     @{ Key = 'TerminalWindow'; Value = $TerminalWindow },
                     @{ Key = 'TerminalProfile'; Value = $TerminalProfile },
                     @{ Key = 'TerminalTitle'; Value = $TerminalTitle },
                     @{ Key = 'TabColor'; Value = $TabColor },
-                    @{ Key = 'ColorScheme'; Value = $ColorScheme }
+                    @{ Key = 'ColorScheme'; Value = $ColorScheme },
+                    @{ Key = 'AgentTermPath'; Value = $AgentTermPath },
+                    @{ Key = 'AgentTermHome'; Value = $AgentTermHome }
                 )) { if ($override.Value) { $invoke[$override.Key] = $override.Value } }
                 if ($null -ne $ReadinessTimeoutMs) { $invoke.ReadinessTimeoutMs = $ReadinessTimeoutMs }
+                if ($null -ne $AgentTermPort) { $invoke.AgentTermPort = $AgentTermPort }
                 & $startFn @invoke
             }
             if ($batch.Count -gt 0) {
-                $launchResults = @(Invoke-LnchWindowsTerminal -Contexts $batch.ToArray())
+                $launchResults = @(Invoke-LnchTerminal -Contexts $batch.ToArray())
                 foreach ($launchResult in $launchResults) {
                     if ($launchResult.Accepted) {
                         if (-not $launchResult.Ready) { Write-Warning "terminal accepted $($launchResult.Context.Name), but child readiness timed out (launch $($launchResult.Context.LaunchId))" }
-                        else { Write-Host "-> $($launchResult.Context.Name) opened in Windows Terminal" }
+                        else { Write-Host "-> $($launchResult.Context.Name) opened in $($launchResult.Context.Terminal.Backend)" }
                     } else {
                         Write-Warning "$($launchResult.Error); launching $($launchResult.Context.Name) inline"
                         & $startFn -FromLauncher -LaunchId $launchResult.Context.LaunchId -RuntimeRoot $launchResult.Context.RuntimeRoot
@@ -859,11 +868,11 @@ function global:lnch {
     Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
 
 
-    # default: hand off through the Windows Terminal adapter
+    # default: hand off through the selected terminal adapter
     if (-not $FromLauncher) {
-        $requestedMode = if ($Here) { 'inline' } else { $TerminalMode }
-        $terminal = Get-LnchTerminalConfig -Mode $requestedMode -Window $TerminalWindow -ProfileName $TerminalProfile -TitleTemplate $TerminalTitle -TabColor $TabColor -ColorScheme $ColorScheme -ReadinessTimeoutMs $ReadinessTimeoutMs -Agent $agent
-        if ($terminal.Mode -ne 'inline') {
+        $requestedMode = if ($Here -or $TerminalBackend -eq 'inline') { 'inline' } else { $TerminalMode }
+        $terminal = Get-LnchTerminalConfig -Mode $requestedMode -Backend $TerminalBackend -Window $TerminalWindow -ProfileName $TerminalProfile -TitleTemplate $TerminalTitle -TabColor $TabColor -ColorScheme $ColorScheme -AgentTermPath $AgentTermPath -AgentTermHome $AgentTermHome -AgentTermPort $AgentTermPort -ReadinessTimeoutMs $ReadinessTimeoutMs -Agent $agent
+        if ($terminal.Mode -ne 'inline' -and $terminal.Backend -ne 'inline') {
             $verbPayload = @()
             foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
             $context = New-LnchLaunchContext -Name $Name -Directory $dir -Root $rootFull -Agent $agent -Prompt @($Prompt) -Verbs $verbPayload -Fresh $isNew -Terminal $terminal
@@ -871,10 +880,10 @@ function global:lnch {
                 $LaunchBatch.Add($context) | Out-Null
                 return
             }
-            $launchResult = @(Invoke-LnchWindowsTerminal -Contexts @($context))[0]
+            $launchResult = @(Invoke-LnchTerminal -Contexts @($context))[0]
             if ($launchResult.Accepted) {
                 if (-not $launchResult.Ready) { Write-Warning "terminal accepted $Name, but child readiness timed out (launch $($context.LaunchId))" }
-                else { Write-Host "-> $Name opened in Windows Terminal" }
+                else { Write-Host "-> $Name opened in $($context.Terminal.Backend)" }
                 return
             }
             Write-Warning "$($launchResult.Error); launching inline instead"

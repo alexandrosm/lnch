@@ -57,16 +57,21 @@ function global:Get-LnchTerminalConfig {
     [CmdletBinding()]
     param(
         [string]$Mode,
+        [string]$Backend,
         [string]$Window,
         [Alias('Profile')][string]$ProfileName,
         [string]$TitleTemplate,
         [string]$TabColor,
         [string]$ColorScheme,
+        [string]$AgentTermPath,
+        [string]$AgentTermHome,
+        [Nullable[int]]$AgentTermPort,
         [Nullable[int]]$ReadinessTimeoutMs,
         [string]$Agent
     )
     $user = Get-LnchUserConfig
     $terminal = if ($user -and $user.terminal) { $user.terminal } else { $null }
+    $resolvedBackend = if ($Backend) { $Backend } elseif ($terminal.backend) { [string]$terminal.backend } else { 'auto' }
     $resolvedMode = if ($Mode) { $Mode } elseif ($terminal.mode) { [string]$terminal.mode } else { 'tab' }
     $resolvedWindow = if ($Window) { $Window } elseif ($terminal.window) { [string]$terminal.window } else { 'last' }
     $resolvedProfile = if ($ProfileName) { $ProfileName } elseif ($terminal.profile) { [string]$terminal.profile } else { 'current' }
@@ -79,14 +84,20 @@ function global:Get-LnchTerminalConfig {
     if (-not $resolvedColor -and $terminal.tabColor) { $resolvedColor = [string]$terminal.tabColor }
     $resolvedScheme = if ($ColorScheme) { $ColorScheme } elseif ($terminal.colorScheme) { [string]$terminal.colorScheme } else { $null }
     $resolvedTimeout = if ($null -ne $ReadinessTimeoutMs) { [int]$ReadinessTimeoutMs } elseif ($null -ne $terminal.readinessTimeoutMs) { [int]$terminal.readinessTimeoutMs } else { 5000 }
+    $resolvedAgentTermPath = if ($AgentTermPath) { $AgentTermPath } elseif ($terminal.agentTermPath) { [string]$terminal.agentTermPath } elseif ($env:LNCH_AGENTTERM_PATH) { $env:LNCH_AGENTTERM_PATH } else { $null }
+    $resolvedAgentTermHome = if ($AgentTermHome) { $AgentTermHome } elseif ($terminal.agentTermHome) { [string]$terminal.agentTermHome } elseif ($env:AGENTTERM_HOME) { $env:AGENTTERM_HOME } else { $env:USERPROFILE }
+    $resolvedAgentTermPort = if ($null -ne $AgentTermPort) { [int]$AgentTermPort } elseif ($null -ne $terminal.agentTermPort) { [int]$terminal.agentTermPort } else { 7685 }
 
+    if ($resolvedBackend -notin @('auto', 'wt', 'agentterm', 'inline')) { throw "invalid terminal backend '$resolvedBackend'" }
     if ($resolvedMode -notin @('tab', 'split-right', 'split-down', 'new-window', 'inline')) { throw "invalid terminal mode '$resolvedMode'" }
     if ([string]::IsNullOrWhiteSpace($resolvedWindow)) { throw 'terminal window target cannot be empty' }
     if ($resolvedColor -and $resolvedColor -notmatch '^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$') { throw "invalid terminal tab color '$resolvedColor'" }
     if ($resolvedTimeout -lt 0 -or $resolvedTimeout -gt 60000) { throw 'terminal readinessTimeoutMs must be between 0 and 60000' }
+    if ($resolvedAgentTermPort -lt 1 -or $resolvedAgentTermPort -gt 65535) { throw 'terminal agentTermPort must be between 1 and 65535' }
 
     $profileTarget = if ($resolvedProfile -eq 'current') { $env:WT_PROFILE_ID } elseif ($resolvedProfile -eq 'default') { $null } else { $resolvedProfile }
     [pscustomobject][ordered]@{
+        Backend            = $resolvedBackend
         Mode               = $resolvedMode
         Window             = $resolvedWindow
         Profile            = $profileTarget
@@ -94,6 +105,9 @@ function global:Get-LnchTerminalConfig {
         TabColor           = $resolvedColor
         ColorScheme        = $resolvedScheme
         ReadinessTimeoutMs = $resolvedTimeout
+        AgentTermPath      = $resolvedAgentTermPath
+        AgentTermHome      = $resolvedAgentTermHome
+        AgentTermPort      = $resolvedAgentTermPort
     }
 }
 
@@ -152,6 +166,7 @@ function global:New-LnchLaunchContext {
         Fresh       = [bool]$Fresh
         RuntimeRoot = Get-LnchRuntimeRoot
         Terminal    = [pscustomobject][ordered]@{
+            Backend            = $Terminal.Backend
             Mode               = $Terminal.Mode
             Window             = Resolve-LnchTerminalWindow -Terminal $Terminal -Directory $Directory -Project $Name
             Profile            = $Terminal.Profile
@@ -159,6 +174,12 @@ function global:New-LnchLaunchContext {
             TabColor           = $Terminal.TabColor
             ColorScheme        = $Terminal.ColorScheme
             ReadinessTimeoutMs = $Terminal.ReadinessTimeoutMs
+            AgentTermPath      = $Terminal.AgentTermPath
+            AgentTermHome      = $Terminal.AgentTermHome
+            AgentTermPort      = $Terminal.AgentTermPort
+            Identity           = $null
+            SessionId          = $null
+            ProcessId          = $null
         }
     }
     Write-LnchAtomicJson -Path (Get-LnchLaunchContextPath $id) -Value $context
@@ -191,8 +212,12 @@ function global:Write-LnchTerminalReceipt {
         Directory    = $Context.Directory
         Root         = $Context.Root
         Agent        = $Context.Agent
+        Backend      = $Context.Terminal.Backend
         Window       = $Context.Terminal.Window
         Mode         = $Context.Terminal.Mode
+        TerminalId   = $Context.Terminal.Identity
+        TerminalSessionId = $Context.Terminal.SessionId
+        TerminalProcessId = $Context.Terminal.ProcessId
         StartedAt    = $Context.CreatedAt
         UpdatedAt    = (Get-Date).ToUniversalTime().ToString('o')
         ExitCode     = $ExitCode
@@ -240,12 +265,29 @@ function script:Add-LnchWtActionArguments {
     foreach ($value in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Launcher, '-LaunchId', $Context.LaunchId, '-RuntimeRoot', $Context.RuntimeRoot)) { $Arguments.Add($value) | Out-Null }
 }
 
+function global:Set-LnchLaunchTerminalIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Context,
+        [Parameter(Mandatory)][string]$Backend,
+        $Identity,
+        [string]$SessionId,
+        [Nullable[int]]$ProcessId
+    )
+    $Context.Terminal.Backend = $Backend
+    $Context.Terminal.Identity = $Identity
+    $Context.Terminal.SessionId = $SessionId
+    $Context.Terminal.ProcessId = $ProcessId
+    Write-LnchAtomicJson -Path (Get-LnchLaunchContextPath $Context.LaunchId) -Value $Context
+}
+
 function global:Invoke-LnchWindowsTerminal {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object[]]$Contexts)
     if ($Contexts.Count -eq 0) { return @() }
     $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     if (-not $wt) { return @($Contexts | ForEach-Object { [pscustomobject]@{ Context = $_; Accepted = $false; Ready = $false; Receipt = $null; Error = 'wt not found' } }) }
+    foreach ($context in $Contexts) { Set-LnchLaunchTerminalIdentity -Context $context -Backend wt }
     $shell = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     $shellExe = if ($shell) { $shell.Source } else { Join-Path $PSHOME 'powershell.exe' }
     $launcher = Join-Path $script:LnchRoot 'Lnch-InTab.ps1'
@@ -303,8 +345,12 @@ function global:Get-LnchTerminalSessions {
             Project      = $receipt.Project
             Directory    = $receipt.Directory
             Agent        = $receipt.Agent
+            Backend      = $receipt.Backend
             Window       = $receipt.Window
             Mode         = $receipt.Mode
+            TerminalId   = $receipt.TerminalId
+            TerminalSessionId = $receipt.TerminalSessionId
+            TerminalProcessId = $receipt.TerminalProcessId
             StartedAt    = $receipt.StartedAt
             UpdatedAt    = $receipt.UpdatedAt
             ExitCode     = $receipt.ExitCode
@@ -322,5 +368,5 @@ function global:Show-LnchTerminalSessions {
         return
     }
     Write-Host ("== lnch terminal sessions ({0}) ==" -f $items.Count)
-    foreach ($item in $items) { Write-Host ("[{0}] {1} | {2} | {3} | pid={4}" -f $item.State, $item.Project, $item.Agent, $item.Window, $item.Pid) }
+    foreach ($item in $items) { Write-Host ("[{0}] {1} | {2} | {3}:{4} | pid={5}" -f $item.State, $item.Project, $item.Agent, $item.Backend, $item.Window, $item.Pid) }
 }

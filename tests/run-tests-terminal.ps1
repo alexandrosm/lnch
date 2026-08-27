@@ -41,6 +41,7 @@ exit /b 0
 
     $defaults = Get-LnchTerminalConfig -Agent omp
     Check 'default tab mode' ($defaults.Mode -eq 'tab')
+    Check 'default backend auto' ($defaults.Backend -eq 'auto')
     Check 'current profile captured' ($defaults.Profile -eq $env:WT_PROFILE_ID)
     Check 'agent color selected' ($defaults.TabColor -eq '#123456')
     Check 'title template loaded' ($defaults.TitleTemplate -eq $titleTemplate)
@@ -48,6 +49,8 @@ exit /b 0
     Check 'inline mode accepted' ($inlinePolicy.Mode -eq 'inline')
     Check 'custom window accepted' ($inlinePolicy.Window -eq 'workbench')
     Check 'default profile omits override' ($null -eq $inlinePolicy.Profile)
+    $agentTermPolicy = Get-LnchTerminalConfig -Backend agentterm -AgentTermPath 'C:\tools\agentterm.exe' -AgentTermHome $testRoot -AgentTermPort 8123 -Agent omp
+    Check 'AgentTerm policy accepted' ($agentTermPolicy.Backend -eq 'agentterm' -and $agentTermPolicy.AgentTermPort -eq 8123 -and $agentTermPolicy.AgentTermHome -eq $testRoot)
 
     $contextA = New-LnchLaunchContext -Name alpha -Directory $projectA -Root $testRoot -Agent omp -Prompt @('hello', 'world') -Verbs @() -Fresh $false -Terminal $defaults
     $contextB = New-LnchLaunchContext -Name beta -Directory $projectB -Root $testRoot -Agent omp -Prompt @() -Verbs @() -Fresh $true -Terminal $defaults
@@ -56,6 +59,7 @@ exit /b 0
     $results = @(Invoke-LnchWindowsTerminal -Contexts @($contextA, $contextB))
     $logged = Get-Content -LiteralPath $wtLog -Raw
     Check 'batch accepted' (@($results | Where-Object Accepted).Count -eq 2)
+    Check 'WT invocation resolves backend' (@($results | Where-Object { $_.Context.Terminal.Backend -eq 'wt' }).Count -eq 2)
     Check 'one batched wt call' ([regex]::Matches($logged, '^WT ', [System.Text.RegularExpressions.RegexOptions]::Multiline).Count -eq 1)
     Check 'two tab actions' ([regex]::Matches($logged, 'new-tab').Count -eq 2)
     Check 'environment inheritance explicit' ([regex]::Matches($logged, '--inheritEnvironment').Count -eq 2)
@@ -126,9 +130,11 @@ exit /b 0
     $invalidMode = $false; try { Get-LnchTerminalConfig -Mode sideways -Agent omp | Out-Null } catch { $invalidMode = $true }
     $invalidColor = $false; try { Get-LnchTerminalConfig -TabColor red -Agent omp | Out-Null } catch { $invalidColor = $true }
     $invalidLaunchId = $false; try { Get-LnchLaunchContextPath '..\outside' | Out-Null } catch { $invalidLaunchId = $true }
+    $invalidBackend = $false; try { Get-LnchTerminalConfig -Backend mystery -Agent omp | Out-Null } catch { $invalidBackend = $true }
     Check 'invalid mode rejected' $invalidMode
     Check 'invalid color rejected' $invalidColor
     Check 'invalid launch id rejected' $invalidLaunchId
+    Check 'invalid backend rejected' $invalidBackend
 
     Write-Host ''
     if ($script:fail -eq 0) { Write-Host 'RESULT: TERMINAL ADAPTER PASS' } else { throw "$script:fail terminal adapter check(s) failed" }

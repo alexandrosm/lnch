@@ -220,7 +220,7 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
 
     if (-not (Test-Path -LiteralPath (Join-Path $configDir 'update-cache.json') -PathType Leaf)) { throw 'first-run update cache was not written' }
     $joinedOutput = $output -join ' '
-    if ($joinedOutput -notmatch [regex]::Escape('-> existing opened in Windows Terminal') -or $joinedOutput -notmatch [regex]::Escape('-> fresh opened in Windows Terminal')) {
+    if ($joinedOutput -notmatch [regex]::Escape('-> existing opened in wt') -or $joinedOutput -notmatch [regex]::Escape('-> fresh opened in wt')) {
         throw "parent launches did not complete:`n$($output -join [Environment]::NewLine)"
     }
 
