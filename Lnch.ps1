@@ -30,14 +30,17 @@
 #   -Here   launch inline instead of a new tab.
 #   Root:   $env:LNCH_PROJECTS_DIR, otherwise <current working directory>\projects
 #   Config: %APPDATA%\lnch\config.json (override dir: $env:LNCH_CONFIG_DIR)
-#   Discover: lnch -Discover [-Json] / lnch --discover [--json]
+#   Discover: --discover [--json], --sessions [project] [--json],
+#             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.2.0'
+$script:LnchVersion = '1.3.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
 . (Join-Path $script:LnchRoot 'ProjectDiscovery.ps1')
+. (Join-Path $script:LnchRoot 'SessionDiscovery.ps1')
+. (Join-Path $script:LnchRoot 'TranscriptDiscovery.ps1')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
 # agents.json fills the gaps (that is the point of the tent).
@@ -513,6 +516,8 @@ function global:lnch {
         [string]$SetDefaultAgent,
         [switch]$Doctor,
         [switch]$Discover,
+        [switch]$Sessions,
+        [string]$Transcript,
         [switch]$Json,
         [switch]$Version
     )
@@ -524,6 +529,14 @@ function global:lnch {
     }
     if ($Discover) {
         Show-LnchAgentDatastores -Json:$Json
+        return
+    }
+    if ($Sessions) {
+        Show-LnchSessions -Project $Name -Agent $(if ($Agent) { @($Agent) } else { $null }) -Json:$Json
+        return
+    }
+    if ($Transcript) {
+        Show-LnchSessionTranscript -Reference $Transcript -Agent $Agent -Json:$Json
         return
     }
     if ($PSBoundParameters.ContainsKey('SetDefaultAgent')) {

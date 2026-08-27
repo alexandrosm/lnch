@@ -150,6 +150,8 @@ try {
     Write-Host '=== DISC: datastore discovery through bash face ==='
     $out = BashRun 'lnch --discover --json'
     Check DISC-bash (($out -match '"Schema"\s*:\s*2') -and ($out -match '"Agent"\s*:\s*"omp"')) $out
+    $out = BashRun 'lnch --sessions --json'
+    Check SESS-bash (($out -match '"Schema"\s*:\s*1') -and ($out -match '"Sessions"\s*:')) $out
 
     Write-Host '=== CMD: AutoRun lifecycle + lnch-cli.cmd ==='
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchRoot 'install-cmd.ps1') | Out-Null
@@ -160,6 +162,8 @@ try {
     Check CMD-shim (($out -match '\[omp-stub\]') -and ($out -match 'hi there')) $out
     $out = CmdRun ('"' + $cli + '" --discover --json')
     Check DISC-cmd (($out -match '"Schema"\s*:\s*2') -and ($out -match '"Agent"\s*:\s*"codex"')) $out
+    $out = CmdRun ('"' + $cli + '" --sessions --json')
+    Check SESS-cmd (($out -match '"Schema"\s*:\s*1') -and ($out -match '"Sessions"\s*:')) $out
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchRoot 'install-cmd.ps1') -Remove | Out-Null
     $chk2 = AutoRunValue
     Check CMD-autorun-removed ((( $null -eq $chk2) -or (-not ($chk2 -match 'lnch'))))

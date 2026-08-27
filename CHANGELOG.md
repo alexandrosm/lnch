@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.0
+
+- Added Level Two unified session catalogs and Level Three explicit transcript normalization across all seven agents, including project reconciliation, native resume metadata, messages, reasoning, tool calls/results, model/compaction/reset events, provenance, loss accounting, CLI/PowerShell APIs, and short-lived read caching.
+
 ## v1.2.0
 
 - Added Level One project discovery for all seven agents: native project extraction, unresolved-record retention, path normalization, cross-agent workspace reconciliation, provisional stable identities, per-agent and unified PowerShell APIs, and schema-2 human/JSON output.

@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.2.0   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.3.0   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -66,6 +66,8 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 | `lnch -Discover` / `--discover` | Locate the executable and private datastore candidates for all seven built-in agents |
 | `lnch -Discover -Json` / `--discover --json` | Emit the versioned discovery document for automation |
+| `lnch -Sessions [-Name <project>] [-Agent <agent>] [-Json]` / `--sessions [project]` | List normalized native sessions across agents, optionally filtered by project or agent |
+| `lnch -Transcript <agent:id> [-Json]` / `--transcript <agent:id>` | Explicitly decode one native transcript into the normalized event schema |
 
 
 Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata and opens in its own tab in the current Windows Terminal window.
@@ -155,6 +157,25 @@ $projectInventory = Get-LnchProjectInventory
 ```
 
 Set `LNCH_DISCOVERY_ROOTS` to a platform-separated list of additional bounded roots for project-local agents and fingerprints. Discovery never reads credential values or modifies an agent store. Aider remains partial because it has no global project registry. OpenCode is partial when only its current SQLite store remains and no compatible `opencode` CLI is installed.
+
+## Sessions and normalized transcripts
+
+Level Two catalogs native sessions for all seven agents without copying them. Session schema `1` includes `agent:id` reference, native ID, reconciled project identity/path, title, timestamps, parent/fork, model, archived/active state when knowable, transcript path/availability, native resume command, source, and confidence.
+
+```powershell
+lnch --sessions
+lnch --sessions api --agent claude --json
+$sessions = Get-LnchSessionInventory
+```
+
+Level Three decodes one explicitly selected native transcript into ordered events: messages, reasoning summaries, tool calls/results, model changes, compaction, reset, and system boundaries. Every event retains source type/line and parent identity where available; unsupported native records become counted loss entries rather than disappearing silently.
+
+```powershell
+lnch --transcript omp:01abc... --json
+$transcript = Get-LnchSessionTranscript -Reference 'claude:<session-id>'
+```
+
+Transcript output can contain source prompts, file contents, command output, and credentials previously exposed to an agent. It is never emitted by ordinary discovery and should be handled as confidential data. Aider's Markdown source necessarily loses structured tools and timestamps; OpenCode current-database decoding uses its native exporter when installed.
 
 ## Agent state map
 

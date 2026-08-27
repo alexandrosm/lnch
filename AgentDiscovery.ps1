@@ -1,7 +1,8 @@
 # Read-only datastore discovery for the seven built-in lnch agents.
 
 function script:Get-LnchDiscoveryHome {
-    $homePath = [Environment]::GetFolderPath('UserProfile')
+    $homePath = $env:LNCH_DISCOVERY_HOME
+    if (-not $homePath) { $homePath = [Environment]::GetFolderPath('UserProfile') }
     if (-not $homePath) { $homePath = $env:USERPROFILE }
     if (-not $homePath) { $homePath = $env:HOME }
     if (-not $homePath) { throw 'could not resolve the user home directory' }

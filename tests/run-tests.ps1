@@ -239,7 +239,7 @@ try {
         'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
         'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
         'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
-        'QWEN_HOME', 'QWEN_RUNTIME_DIR', 'LNCH_DISCOVERY_ROOTS'
+        'QWEN_HOME', 'QWEN_RUNTIME_DIR', 'LNCH_DISCOVERY_HOME', 'LNCH_DISCOVERY_ROOTS'
     )
     $discoveryEnvBefore = @{}
     foreach ($envName in $discoveryEnvNames) {
@@ -257,6 +257,7 @@ try {
         $xdgState = Join-Path $discoveryRoot 'xdg-state'
         $qwenStore = Join-Path $discoveryRoot 'qwen-home'
         $qwenRuntime = Join-Path $discoveryRoot 'qwen-runtime'
+        $discoveryHome = Join-Path $discoveryRoot 'home'
         $projectRoot = Join-Path $discoveryRoot 'projects'
         $sharedProject = Join-Path $projectRoot 'shared-omp-claude'
         $codexProject = Join-Path $projectRoot 'codex-project'
@@ -266,7 +267,7 @@ try {
         $qwenProject = Join-Path $projectRoot 'qwen-project'
 
         foreach ($dir in @(
-            $ompStore, $claudeStore, $codexStore, (Join-Path $geminiBase '.gemini'),
+            $discoveryHome, $ompStore, $claudeStore, $codexStore, (Join-Path $geminiBase '.gemini'),
             $openConfig, (Join-Path $xdgData 'opencode'), (Join-Path $xdgCache 'opencode'),
             (Join-Path $xdgState 'opencode'), $qwenStore, $qwenRuntime,
             $sharedProject, $codexProject, $geminiProject, $aiderProject, $openProject, $qwenProject
@@ -279,20 +280,28 @@ try {
         New-Item -ItemType Directory -Force -Path $ompBucket | Out-Null
         @(
             (@{ type = 'title'; title = 'fixture' } | ConvertTo-Json -Compress),
-            (@{ type = 'session'; version = 3; id = 'omp-fixture'; timestamp = '2026-08-26T00:00:00Z'; cwd = $sharedProject } | ConvertTo-Json -Compress)
+            (@{ type = 'session'; version = 3; id = 'omp-fixture'; timestamp = '2026-08-26T00:00:00Z'; cwd = $sharedProject } | ConvertTo-Json -Compress),
+            (@{ type = 'message'; id = 'omp-user'; parentId = $null; timestamp = '2026-08-26T00:00:01Z'; message = @{ role = 'user'; content = 'fix the fixture' } } | ConvertTo-Json -Depth 6 -Compress),
+            (@{ type = 'message'; id = 'omp-assistant'; parentId = 'omp-user'; timestamp = '2026-08-26T00:00:02Z'; message = @{ role = 'assistant'; model = 'fixture-model'; content = @(@{ type = 'text'; text = 'working' }, @{ type = 'toolCall'; id = 'tool-1'; name = 'read'; arguments = @{ path = 'fixture.txt' } }) } } | ConvertTo-Json -Depth 8 -Compress),
+            (@{ type = 'message'; id = 'omp-result'; parentId = 'omp-assistant'; timestamp = '2026-08-26T00:00:03Z'; message = @{ role = 'toolResult'; toolCallId = 'tool-1'; toolName = 'read'; content = @(@{ type = 'text'; text = 'fixture result' }); isError = $false } } | ConvertTo-Json -Depth 8 -Compress)
         ) | Set-Content -LiteralPath (Join-Path $ompBucket 'fixture.jsonl') -Encoding utf8
 
         $claudeProjectStore = Join-Path $claudeStore 'projects\fixture-shared'
         New-Item -ItemType Directory -Force -Path $claudeProjectStore | Out-Null
-        @{ type = 'user'; uuid = 'claude-fixture'; sessionId = 'claude-fixture'; cwd = $sharedProject; timestamp = '2026-08-26T00:01:00Z'; message = @{ role = 'user'; content = 'fixture' } } |
-            ConvertTo-Json -Depth 5 -Compress |
-            Set-Content -LiteralPath (Join-Path $claudeProjectStore 'claude-fixture.jsonl') -Encoding utf8
+        @(
+            (@{ type = 'user'; uuid = 'claude-user'; sessionId = 'claude-fixture'; cwd = $sharedProject; timestamp = '2026-08-26T00:01:00Z'; message = @{ role = 'user'; content = 'claude fixture prompt' } } | ConvertTo-Json -Depth 6 -Compress),
+            (@{ type = 'assistant'; uuid = 'claude-assistant'; parentUuid = 'claude-user'; sessionId = 'claude-fixture'; cwd = $sharedProject; timestamp = '2026-08-26T00:01:01Z'; message = @{ role = 'assistant'; model = 'claude-fixture-model'; content = @(@{ type = 'text'; text = 'claude fixture answer' }) } } | ConvertTo-Json -Depth 8 -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $claudeProjectStore 'claude-fixture.jsonl') -Encoding utf8
 
         $codexSessionStore = Join-Path $codexStore 'sessions\2026\08\26'
         New-Item -ItemType Directory -Force -Path $codexSessionStore | Out-Null
-        @{ type = 'session_meta'; timestamp = '2026-08-26T00:02:00Z'; payload = @{ id = 'codex-fixture'; cwd = $codexProject } } |
-            ConvertTo-Json -Depth 5 -Compress |
-            Set-Content -LiteralPath (Join-Path $codexSessionStore 'rollout-codex-fixture.jsonl') -Encoding utf8
+        @(
+            (@{ type = 'session_meta'; timestamp = '2026-08-26T00:02:00Z'; payload = @{ id = 'codex-fixture'; cwd = $codexProject } } | ConvertTo-Json -Depth 5 -Compress),
+            (@{ type = 'turn_context'; timestamp = '2026-08-26T00:02:01Z'; payload = @{ model = 'codex-fixture-model' } } | ConvertTo-Json -Depth 5 -Compress),
+            (@{ type = 'response_item'; timestamp = '2026-08-26T00:02:02Z'; payload = @{ type = 'message'; role = 'user'; content = @(@{ type = 'input_text'; text = 'codex fixture prompt' }) } } | ConvertTo-Json -Depth 8 -Compress),
+            (@{ type = 'response_item'; timestamp = '2026-08-26T00:02:03Z'; payload = @{ type = 'message'; role = 'assistant'; content = @(@{ type = 'output_text'; text = 'codex fixture answer' }) } } | ConvertTo-Json -Depth 8 -Compress),
+            (@{ type = 'compacted'; timestamp = '2026-08-26T00:02:04Z'; payload = @{ message = 'codex fixture compacted' } } | ConvertTo-Json -Depth 5 -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $codexSessionStore 'rollout-codex-fixture.jsonl') -Encoding utf8
 
         $geminiStore = Join-Path $geminiBase '.gemini'
         $geminiRegistry = [ordered]@{ projects = [ordered]@{} }
@@ -300,21 +309,40 @@ try {
         $geminiRegistry | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $geminiStore 'projects.json') -Encoding utf8
         $geminiChats = Join-Path $geminiStore 'tmp\gemini-fixture\chats'
         New-Item -ItemType Directory -Force -Path $geminiChats | Out-Null
-        Set-Content -LiteralPath (Join-Path $geminiChats 'session-gemini-fixture.jsonl') -Value '{"sessionId":"gemini-fixture","projectHash":"fixture"}' -Encoding utf8
+        @(
+            '{"sessionId":"gemini-fixture","projectHash":"fixture","startTime":"2026-08-26T00:03:00Z"}',
+            (@{ id = 'gemini-user'; type = 'user'; timestamp = '2026-08-26T00:03:01Z'; content = 'gemini fixture prompt' } | ConvertTo-Json -Compress),
+            (@{ id = 'gemini-answer'; type = 'gemini'; timestamp = '2026-08-26T00:03:02Z'; model = 'gemini-fixture-model'; content = 'gemini fixture answer' } | ConvertTo-Json -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $geminiChats 'session-gemini-fixture.jsonl') -Encoding utf8
 
-        Set-Content -LiteralPath (Join-Path $aiderProject '.aider.chat.history.md') -Value '#### fixture'
+        @(
+            '# aider chat started at 2026-08-26',
+            '#### aider fixture prompt',
+            '',
+            'aider fixture answer'
+        ) | Set-Content -LiteralPath (Join-Path $aiderProject '.aider.chat.history.md') -Encoding utf8
 
         $openLegacy = Join-Path $xdgData 'opencode\storage\session\fixture'
         New-Item -ItemType Directory -Force -Path $openLegacy | Out-Null
-        @{ id = 'opencode-fixture'; directory = $openProject; title = 'fixture' } |
-            ConvertTo-Json -Compress |
+        @{ id = 'opencode-fixture'; directory = $openProject; title = 'fixture'; time = @{ created = 1787702700000; updated = 1787702701000 } } |
+            ConvertTo-Json -Depth 5 -Compress |
             Set-Content -LiteralPath (Join-Path $openLegacy 'opencode-fixture.json') -Encoding utf8
+        $openMessageRoot = Join-Path $xdgData 'opencode\storage\message\opencode-fixture'
+        $openPartRoot = Join-Path $xdgData 'opencode\storage\part\open-message'
+        New-Item -ItemType Directory -Force -Path $openMessageRoot, $openPartRoot | Out-Null
+        @{ id = 'open-message'; sessionID = 'opencode-fixture'; role = 'user'; time = @{ created = 1787702701000 } } |
+            ConvertTo-Json -Depth 5 -Compress |
+            Set-Content -LiteralPath (Join-Path $openMessageRoot 'open-message.json') -Encoding utf8
+        @{ id = 'open-part'; sessionID = 'opencode-fixture'; messageID = 'open-message'; type = 'text'; text = 'opencode fixture prompt' } |
+            ConvertTo-Json -Compress |
+            Set-Content -LiteralPath (Join-Path $openPartRoot 'open-part.json') -Encoding utf8
 
         $qwenChats = Join-Path $qwenRuntime 'projects\qwen-fixture\chats'
         New-Item -ItemType Directory -Force -Path $qwenChats | Out-Null
-        @{ uuid = 'qwen-message'; parentUuid = $null; sessionId = 'qwen-fixture'; timestamp = '2026-08-26T00:03:00Z'; type = 'user'; cwd = $qwenProject; version = 'fixture' } |
-            ConvertTo-Json -Compress |
-            Set-Content -LiteralPath (Join-Path $qwenChats 'qwen-fixture.jsonl') -Encoding utf8
+        @(
+            (@{ uuid = 'qwen-user'; parentUuid = $null; sessionId = 'qwen-fixture'; timestamp = '2026-08-26T00:04:00Z'; type = 'user'; cwd = $qwenProject; version = 'fixture'; message = @{ role = 'user'; parts = @(@{ text = 'qwen fixture prompt' }) } } | ConvertTo-Json -Depth 8 -Compress),
+            (@{ uuid = 'qwen-answer'; parentUuid = 'qwen-user'; sessionId = 'qwen-fixture'; timestamp = '2026-08-26T00:04:01Z'; type = 'assistant'; cwd = $qwenProject; version = 'fixture'; model = 'qwen-fixture-model'; message = @{ role = 'model'; parts = @(@{ text = 'qwen fixture answer' }) } } | ConvertTo-Json -Depth 8 -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $qwenChats 'qwen-fixture.jsonl') -Encoding utf8
 
         [Environment]::SetEnvironmentVariable('PI_CODING_AGENT_DIR', $ompStore, 'Process')
         [Environment]::SetEnvironmentVariable('OMP_PROFILE', $null, 'Process')
@@ -329,6 +357,7 @@ try {
         [Environment]::SetEnvironmentVariable('QWEN_HOME', $qwenStore, 'Process')
         [Environment]::SetEnvironmentVariable('QWEN_RUNTIME_DIR', $qwenRuntime, 'Process')
         [Environment]::SetEnvironmentVariable('LNCH_DISCOVERY_ROOTS', $projectRoot, 'Process')
+        [Environment]::SetEnvironmentVariable('LNCH_DISCOVERY_HOME', $discoveryHome, 'Process')
 
         $inventory = @(Get-LnchAgentDatastores)
         Check 'V seven agents' ($inventory.Count -eq 7)
@@ -362,6 +391,31 @@ try {
         Check 'V aider partial project' (@(($projectInventory.Agents | Where-Object Agent -eq 'aider').Projects | Where-Object Path -eq $aiderProject).Count -eq 1)
         Check 'V opencode project' (@(($projectInventory.Agents | Where-Object Agent -eq 'opencode').Projects | Where-Object Path -eq $openProject).Count -eq 1)
         Check 'V qwen project' (@((Get-LnchAgentProjects -Agent qwen) | Where-Object Path -eq $qwenProject).Count -eq 1)
+
+        $sessionInventory = Get-LnchSessionInventory
+        $fixtureSessions = @($sessionInventory.Sessions | Where-Object { $_.ProjectPath -in @($sharedProject, $codexProject, $geminiProject, $aiderProject, $openProject, $qwenProject) })
+        Check 'V session schema' ($sessionInventory.Schema -eq 1)
+        Check 'V seven agent sessions' (@($fixtureSessions.Agent | Sort-Object -Unique).Count -eq 7)
+        Check 'V session project IDs' (@($fixtureSessions | Where-Object { $_.ProjectId -like 'workspace:*' }).Count -eq 7)
+
+        foreach ($fixtureAgent in @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')) {
+            $fixtureSession = $fixtureSessions | Where-Object Agent -eq $fixtureAgent | Select-Object -First 1
+            $transcript = if ($fixtureSession) { Get-LnchSessionTranscript -Reference $fixtureSession.Ref } else { $null }
+            Check \"V $fixtureAgent transcript\" ($transcript -and $transcript.Schema -eq 1 -and @($transcript.Events).Count -gt 0)
+        }
+        $ompTranscript = Get-LnchSessionTranscript -Reference 'omp:omp-fixture'
+        Check 'V omp tools normalized' ($ompTranscript.Stats.ToolCalls -eq 1 -and $ompTranscript.Stats.ToolResults -eq 1)
+        $codexTranscript = Get-LnchSessionTranscript -Reference 'codex:codex-fixture'
+        Check 'V codex compaction' (@($codexTranscript.Events | Where-Object Kind -eq 'compaction').Count -eq 1)
+
+        $sessionJsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --sessions --json 2>&1
+        $sessionJson = $null
+        try { $sessionJson = (($sessionJsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
+        Check 'V entry session JSON' ($sessionJson -and $sessionJson.Schema -eq 1 -and @($sessionJson.Sessions).Count -ge 7)
+        $transcriptJsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --transcript omp:omp-fixture --json 2>&1
+        $transcriptJson = $null
+        try { $transcriptJson = (($transcriptJsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
+        Check 'V entry transcript JSON' ($transcriptJson -and $transcriptJson.Schema -eq 1 -and $transcriptJson.Stats.ToolCalls -eq 1)
 
         $jsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --discover --json 2>&1
         $jsonDocument = $null
