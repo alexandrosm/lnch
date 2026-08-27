@@ -214,27 +214,33 @@ function global:Get-LnchAgentDatastores {
 function global:Show-LnchAgentDatastores {
     [CmdletBinding()]
     param([switch]$Json)
-    $agents = @(Get-LnchAgentDatastores)
+    $inventory = Get-LnchProjectInventory
     if ($Json) {
-        $result = [pscustomobject][ordered]@{
-            Schema      = 1
-            GeneratedAt = (Get-Date).ToUniversalTime().ToString('o')
-            Agents      = $agents
-        }
-        ConvertTo-Json -InputObject $result -Depth 8
+        ConvertTo-Json -InputObject $inventory -Depth 10
         return
     }
 
-    Write-Host '== lnch datastore discovery =='
-    foreach ($item in $agents) {
+    Write-Host '== lnch agent and project discovery =='
+    foreach ($item in $inventory.Agents) {
         $tag = switch ($item.Status) { 'ready' { 'ok' } 'store-only' { 'db' } 'binary-only' { 'bin' } default { '--' } }
         $version = if ($item.Version) { " | $($item.Version)" } else { '' }
-        Write-Host ("[{0}] {1,-9} {2}{3}" -f $tag, $item.Agent, $item.Status, $version)
+        Write-Host ("[{0}] {1,-9} {2}{3} | projects={4} ({5})" -f $tag, $item.Agent, $item.Status, $version, $item.Projects.Count, $item.ProjectDiscovery)
         if ($item.Executable) { Write-Host ("          executable: {0}" -f $item.Executable) }
         foreach ($store in $item.Datastores) {
             $storeTag = if ($store.Readable) { 'ok' } elseif ($store.Exists) { '!!' } else { '--' }
             Write-Host ("          [{0}] {1,-12} {2} ({3})" -f $storeTag, $store.Kind, $store.Path, $store.Source)
         }
+        foreach ($project in $item.Projects) {
+            $projectPath = if ($project.Path) { $project.Path } else { "<unresolved:$($project.NativeKeys -join ',')>" }
+            $activity = if ($project.LastActivity) { $project.LastActivity } else { '-' }
+            Write-Host ("               {0} | sessions={1} | active={2}" -f $projectPath, $project.SessionCount, $activity)
+        }
         foreach ($note in $item.Notes) { Write-Host ("          note: {0}" -f $note) }
+    }
+
+    Write-Host ''
+    Write-Host ("== unified projects ({0}) ==" -f $inventory.Projects.Count)
+    foreach ($project in $inventory.Projects) {
+        Write-Host ("     {0} | agents={1} | active={2}" -f $project.Path, ($project.Agents -join ','), $(if ($project.LastActivity) { $project.LastActivity } else { '-' }))
     }
 }

@@ -233,13 +233,13 @@ try {
         else { Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue }
     }
 
-    Write-Host '=== V: Level Zero agent datastore discovery ==='
+    Write-Host '=== V: Level Zero and One agent discovery ==='
     $discoveryRoot = Join-Path $TestRoot 'agent-stores'
     $discoveryEnvNames = @(
         'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
         'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
         'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
-        'QWEN_HOME', 'QWEN_RUNTIME_DIR'
+        'QWEN_HOME', 'QWEN_RUNTIME_DIR', 'LNCH_DISCOVERY_ROOTS'
     )
     $discoveryEnvBefore = @{}
     foreach ($envName in $discoveryEnvNames) {
@@ -257,15 +257,64 @@ try {
         $xdgState = Join-Path $discoveryRoot 'xdg-state'
         $qwenStore = Join-Path $discoveryRoot 'qwen-home'
         $qwenRuntime = Join-Path $discoveryRoot 'qwen-runtime'
+        $projectRoot = Join-Path $discoveryRoot 'projects'
+        $sharedProject = Join-Path $projectRoot 'shared-omp-claude'
+        $codexProject = Join-Path $projectRoot 'codex-project'
+        $geminiProject = Join-Path $projectRoot 'gemini-project'
+        $aiderProject = Join-Path $projectRoot 'aider-project'
+        $openProject = Join-Path $projectRoot 'opencode-project'
+        $qwenProject = Join-Path $projectRoot 'qwen-project'
 
         foreach ($dir in @(
             $ompStore, $claudeStore, $codexStore, (Join-Path $geminiBase '.gemini'),
             $openConfig, (Join-Path $xdgData 'opencode'), (Join-Path $xdgCache 'opencode'),
-            (Join-Path $xdgState 'opencode'), $qwenStore, $qwenRuntime
+            (Join-Path $xdgState 'opencode'), $qwenStore, $qwenRuntime,
+            $sharedProject, $codexProject, $geminiProject, $aiderProject, $openProject, $qwenProject
         )) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
         }
         Set-Content -LiteralPath $openConfigFile -Value '{}'
+
+        $ompBucket = Join-Path $ompStore 'sessions\-fixture-shared-'
+        New-Item -ItemType Directory -Force -Path $ompBucket | Out-Null
+        @(
+            (@{ type = 'title'; title = 'fixture' } | ConvertTo-Json -Compress),
+            (@{ type = 'session'; version = 3; id = 'omp-fixture'; timestamp = '2026-08-26T00:00:00Z'; cwd = $sharedProject } | ConvertTo-Json -Compress)
+        ) | Set-Content -LiteralPath (Join-Path $ompBucket 'fixture.jsonl') -Encoding utf8
+
+        $claudeProjectStore = Join-Path $claudeStore 'projects\fixture-shared'
+        New-Item -ItemType Directory -Force -Path $claudeProjectStore | Out-Null
+        @{ type = 'user'; uuid = 'claude-fixture'; sessionId = 'claude-fixture'; cwd = $sharedProject; timestamp = '2026-08-26T00:01:00Z'; message = @{ role = 'user'; content = 'fixture' } } |
+            ConvertTo-Json -Depth 5 -Compress |
+            Set-Content -LiteralPath (Join-Path $claudeProjectStore 'claude-fixture.jsonl') -Encoding utf8
+
+        $codexSessionStore = Join-Path $codexStore 'sessions\2026\08\26'
+        New-Item -ItemType Directory -Force -Path $codexSessionStore | Out-Null
+        @{ type = 'session_meta'; timestamp = '2026-08-26T00:02:00Z'; payload = @{ id = 'codex-fixture'; cwd = $codexProject } } |
+            ConvertTo-Json -Depth 5 -Compress |
+            Set-Content -LiteralPath (Join-Path $codexSessionStore 'rollout-codex-fixture.jsonl') -Encoding utf8
+
+        $geminiStore = Join-Path $geminiBase '.gemini'
+        $geminiRegistry = [ordered]@{ projects = [ordered]@{} }
+        $geminiRegistry.projects[$geminiProject] = 'gemini-fixture'
+        $geminiRegistry | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $geminiStore 'projects.json') -Encoding utf8
+        $geminiChats = Join-Path $geminiStore 'tmp\gemini-fixture\chats'
+        New-Item -ItemType Directory -Force -Path $geminiChats | Out-Null
+        Set-Content -LiteralPath (Join-Path $geminiChats 'session-gemini-fixture.jsonl') -Value '{"sessionId":"gemini-fixture","projectHash":"fixture"}' -Encoding utf8
+
+        Set-Content -LiteralPath (Join-Path $aiderProject '.aider.chat.history.md') -Value '#### fixture'
+
+        $openLegacy = Join-Path $xdgData 'opencode\storage\session\fixture'
+        New-Item -ItemType Directory -Force -Path $openLegacy | Out-Null
+        @{ id = 'opencode-fixture'; directory = $openProject; title = 'fixture' } |
+            ConvertTo-Json -Compress |
+            Set-Content -LiteralPath (Join-Path $openLegacy 'opencode-fixture.json') -Encoding utf8
+
+        $qwenChats = Join-Path $qwenRuntime 'projects\qwen-fixture\chats'
+        New-Item -ItemType Directory -Force -Path $qwenChats | Out-Null
+        @{ uuid = 'qwen-message'; parentUuid = $null; sessionId = 'qwen-fixture'; timestamp = '2026-08-26T00:03:00Z'; type = 'user'; cwd = $qwenProject; version = 'fixture' } |
+            ConvertTo-Json -Compress |
+            Set-Content -LiteralPath (Join-Path $qwenChats 'qwen-fixture.jsonl') -Encoding utf8
 
         [Environment]::SetEnvironmentVariable('PI_CODING_AGENT_DIR', $ompStore, 'Process')
         [Environment]::SetEnvironmentVariable('OMP_PROFILE', $null, 'Process')
@@ -279,6 +328,7 @@ try {
         [Environment]::SetEnvironmentVariable('XDG_STATE_HOME', $xdgState, 'Process')
         [Environment]::SetEnvironmentVariable('QWEN_HOME', $qwenStore, 'Process')
         [Environment]::SetEnvironmentVariable('QWEN_RUNTIME_DIR', $qwenRuntime, 'Process')
+        [Environment]::SetEnvironmentVariable('LNCH_DISCOVERY_ROOTS', $projectRoot, 'Process')
 
         $inventory = @(Get-LnchAgentDatastores)
         Check 'V seven agents' ($inventory.Count -eq 7)
@@ -302,11 +352,23 @@ try {
             @($qwenInventory.Datastores | Where-Object { $_.Source -eq 'QWEN_RUNTIME_DIR' -and $_.Path -eq $qwenRuntime }).Count -eq 1
         )
 
+        $projectInventory = Get-LnchProjectInventory
+        Check 'V project schema' ($projectInventory.Schema -eq 2)
+        Check 'V unified fixture count' (@($projectInventory.Projects | Where-Object { $_.Path -in @($sharedProject, $codexProject, $geminiProject, $aiderProject, $openProject, $qwenProject) }).Count -eq 6)
+        $sharedWorkspace = $projectInventory.Projects | Where-Object Path -eq $sharedProject | Select-Object -First 1
+        Check 'V shared reconciliation' ($sharedWorkspace -and @($sharedWorkspace.Agents | Where-Object { $_ -in @('omp', 'claude') }).Count -eq 2)
+        Check 'V codex project' (@(($projectInventory.Agents | Where-Object Agent -eq 'codex').Projects | Where-Object Path -eq $codexProject).Count -eq 1)
+        Check 'V gemini project' (@(($projectInventory.Agents | Where-Object Agent -eq 'gemini').Projects | Where-Object Path -eq $geminiProject).Count -eq 1)
+        Check 'V aider partial project' (@(($projectInventory.Agents | Where-Object Agent -eq 'aider').Projects | Where-Object Path -eq $aiderProject).Count -eq 1)
+        Check 'V opencode project' (@(($projectInventory.Agents | Where-Object Agent -eq 'opencode').Projects | Where-Object Path -eq $openProject).Count -eq 1)
+        Check 'V qwen project' (@((Get-LnchAgentProjects -Agent qwen) | Where-Object Path -eq $qwenProject).Count -eq 1)
+
         $jsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --discover --json 2>&1
         $jsonDocument = $null
         try { $jsonDocument = (($jsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
-        Check 'V entry JSON schema' ($jsonDocument -and $jsonDocument.Schema -eq 1)
+        Check 'V entry JSON schema' ($jsonDocument -and $jsonDocument.Schema -eq 2)
         Check 'V entry JSON agents' ($jsonDocument -and @($jsonDocument.Agents).Count -eq 7)
+        Check 'V entry JSON projects' ($jsonDocument -and @($jsonDocument.Projects).Count -ge 6)
     } finally {
         foreach ($envName in $discoveryEnvNames) {
             [Environment]::SetEnvironmentVariable($envName, $discoveryEnvBefore[$envName], 'Process')

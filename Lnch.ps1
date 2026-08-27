@@ -33,10 +33,11 @@
 #   Discover: lnch -Discover [-Json] / lnch --discover [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.1.0'
+$script:LnchVersion = '1.2.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
+. (Join-Path $script:LnchRoot 'ProjectDiscovery.ps1')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
 # agents.json fills the gaps (that is the point of the tent).

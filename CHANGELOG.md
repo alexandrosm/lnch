@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.0
+
+- Added Level One project discovery for all seven agents: native project extraction, unresolved-record retention, path normalization, cross-agent workspace reconciliation, provisional stable identities, per-agent and unified PowerShell APIs, and schema-2 human/JSON output.
+
 ## v1.1.0
 
 - Added read-only Level Zero discovery for all seven built-in agents: executable/version detection, environment and profile-aware datastore resolution, existence/readability health, human output, and a versioned JSON document across PowerShell, bash/zsh, and cmd.

@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.1.0   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.2.0   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -142,15 +142,19 @@ Run `lnch -Doctor` for the live capability matrix on your machine.
 
 ## Datastore discovery
 
-`lnch --discover` performs a read-only Level Zero inventory for **omp, claude, codex, gemini, aider, opencode, and qwen**. It resolves native environment overrides, OMP profiles, XDG roots, split Qwen config/runtime roots, OpenCode config/data/cache/state roots, executable paths, agent versions, existence, path type, and readability. Status is `ready`, `binary-only`, `store-only`, or `absent`; one unreadable or malformed location does not block the other agents.
+`lnch --discover` performs a read-only Level Zero and One inventory for **omp, claude, codex, gemini, aider, opencode, and qwen**. Level Zero resolves native environment overrides, OMP profiles, XDG roots, split Qwen config/runtime roots, OpenCode config/data/cache/state roots, executable paths, agent versions, existence, path type, and readability.
+
+Level One extracts each agent's known projects from native indexes, JSONL headers, ownership markers, project-local fingerprints, or a supported native listing command. Paths are canonicalized and reconciled into one workspace entry with a provisional `workspace:<hash>` identity, source agents, native keys, evidence sources, last activity, existence, and confidence. Unresolvable encoded records remain visible under their owning agent instead of being silently discarded.
 
 ```powershell
 lnch --discover
-lnch --discover --json
-$inventory = Get-LnchAgentDatastores
+lnch --discover --json          # schema 2: Agents[] plus reconciled Projects[]
+$stores = Get-LnchAgentDatastores
+$byAgent = Get-LnchAgentProjects
+$projectInventory = Get-LnchProjectInventory
 ```
 
-Discovery never reads credential values or modifies an agent store. Aider is reported as partial because its chat history and repository-map cache are project-local rather than indexed by a global datastore.
+Set `LNCH_DISCOVERY_ROOTS` to a platform-separated list of additional bounded roots for project-local agents and fingerprints. Discovery never reads credential values or modifies an agent store. Aider remains partial because it has no global project registry. OpenCode is partial when only its current SQLite store remains and no compatible `opencode` CLI is installed.
 
 ## Agent state map
 
