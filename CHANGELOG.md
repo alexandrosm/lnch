@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## v1.4.0
 
-- Added an installed-product acceptance gate that exercises a clean first run and ordinary project launch through a real child PowerShell process; CI now tests both the checkout payload and a bootstrap from pushed `main`.
+- Replaced ad hoc new-tab environment variables with a dedicated Windows Terminal adapter and schema-versioned, per-launch JSON envelopes. Prompts, capability verbs, agent choice, resolved roots, and concurrent launches now cross the parent/child boundary without shared mutable variables.
+- Added configurable terminal modes (`tab`, right/down splits, new window, inline), window targeting (`last`, `new`, shared `lnch`, stable per-project, custom names/IDs), profile selection, title templates, tab/agent colors, color schemes, and child-readiness timeouts.
+- Added runtime lifecycle receipts and `lnch --tabs [--prune] [--json]`, mapping launch IDs to projects, agents, child PIDs, `WT_SESSION`, window/mode, readiness, and exit state. Logical tab focusing remains deliberately unsupported because Windows Terminal exposes only volatile numeric tab indices.
+- Batched compatible multi-project launches into one semicolon-delimited `wt.exe` command and made new-tab environment inheritance explicit.
+- Expanded CI with adapter contracts and installed-product acceptance covering existing/fresh sessions, dynamic/explicit roots, spaces and Unicode, presentation arguments, envelope consumption, readiness, receipts, and the public ledger. A manual live smoke exercises the real `wt.exe`.
 
 ## v1.3.2
 

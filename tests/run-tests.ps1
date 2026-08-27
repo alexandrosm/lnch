@@ -15,6 +15,8 @@ $gitCmd  = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git\cmd' } else
 $env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerShell\v1.0;$env:PATH"
 
 $env:LNCH_PROJECTS_DIR = $Projects
+$env:LNCH_RUNTIME_DIR = Join-Path $TestRoot 'runtime'
+$env:LNCH_WT_LOG = Join-Path $TestRoot 'wt.log'
 
 $env:LNCH_NO_UPDATE_CHECK = '1'
 # redirected user-config so persisted-default/hook tests never touch real %APPDATA%
@@ -33,12 +35,17 @@ $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
 
 # deterministic fresh-project agent: seed the default so pickers never fire in A-O
-@{ defaultAgent = 'omp' } |
-    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
+@{ defaultAgent = 'omp'; terminal = @{ readinessTimeoutMs = 0 } } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
 
 $script:fail = 0
 function Check($label, $cond) {
     if ($cond) { Write-Host "PASS $label" } else { $script:fail++; Write-Host "FAIL $label" }
+}
+function Get-WtLaunchIds {
+    if (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG -PathType Leaf)) { return @() }
+    $text = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+    @([regex]::Matches($text, '-LaunchId\s+([0-9a-fA-F-]{36})') | ForEach-Object { $_.Groups[1].Value })
 }
 function Meta([string]$p) { Get-Content -LiteralPath (Join-Path $Projects "$p\.lnch.json") -Raw }
 
@@ -80,40 +87,60 @@ try {
     Check 'E picked theta' (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'E intent saved' ((Meta 'theta') -match 'build a snake game')
 
-    Write-Host '=== E2: multi-project picker launches every selection ==='
+    Write-Host '=== E2: multi-project picker launches one terminal batch ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $env:LNCH_TEST_FZF_MULTI = '1'
     $out = & $__lnchFn
     Remove-Item Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
-    $j = $out -join ' '
-    Check 'E2 theta tab' ($j -match 'WT-STUB -w 0 new-tab --title theta ')
-    Check 'E2 alpha tab' ($j -match 'WT-STUB -w 0 new-tab --title alpha ')
-    Check 'E2 exactly two' ([regex]::Matches($j, 'WT-STUB').Count -eq 2)
-    Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
+    $wtLog = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+    Check 'E2 theta tab' ($wtLog -match 'new-tab .*--title theta ')
+    Check 'E2 alpha tab' ($wtLog -match 'new-tab .*--title alpha ')
+    Check 'E2 one wt invocation' ([regex]::Matches($wtLog, '^WT-STUB', [System.Text.RegularExpressions.RegexOptions]::Multiline).Count -eq 1)
+    Check 'E2 two tab actions' ([regex]::Matches($wtLog, 'new-tab').Count -eq 2)
+    Check 'E2 explicit inheritance' ([regex]::Matches($wtLog, '--inheritEnvironment').Count -eq 2)
+    $batchIds = @(Get-WtLaunchIds)
+    Check 'E2 two launch envelopes' ($batchIds.Count -eq 2)
+    foreach ($batchId in $batchIds) { Remove-Item -LiteralPath (Get-LnchLaunchContextPath $batchId) -Force -ErrorAction SilentlyContinue }
 
     Write-Host '=== E3: numbered multi-range parser ==='
     $indexes = @(ConvertFrom-LnchProjectSelection -Selection '1,3-4' -Count 5)
     Check 'E3 range' (($indexes -join ',') -eq '1,3,4')
     Check 'E3 all' ((@(ConvertFrom-LnchProjectSelection -Selection 'all' -Count 4) -join ',') -eq '1,2,3,4')
 
-    Write-Host '=== F: new-tab handoff env contract ==='
+    Write-Host '=== F: versioned new-tab launch envelope ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $out = & $__lnchFn epsilon hi there
-    $j = $out -join ' '
-    Check 'F sticky project title' ($j -match 'WT-STUB -w 0 new-tab --title epsilon --suppressApplicationTitle .*Lnch-InTab\.ps1')
-    Check 'F name'            ($env:LNCH_NAME -eq 'epsilon')
-    Check 'F prompt'          ($env:LNCH_PROMPT -eq 'hi there')
-    Check 'F fresh env'       ($env:LNCH_FRESH -eq '1')
-    Check 'F verbs env'       ($env:LNCH_VERBS -match '"Verbs":\[\]')
-    Check 'F agent env'       ($env:LNCH_AGENT -eq 'omp')
-    Check 'F root env'        ($env:LNCH_ROOT -eq [System.IO.Path]::GetFullPath($Projects))
-    $out = & $__lnchFn -FromLauncher
+    $wtLog = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+    Check 'F sticky project title' ($wtLog -match 'new-tab .*--title epsilon .*--suppressApplicationTitle')
+    Check 'F last window target' ($wtLog -match '--window last')
+    $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
+    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
+    Check 'F context name'       ($launchContext.Name -eq 'epsilon')
+    Check 'F context prompt'     ((@($launchContext.Prompt) -join ' ') -eq 'hi there')
+    Check 'F context fresh'      ($launchContext.Fresh -eq $true)
+    Check 'F context verbs'      (@($launchContext.Verbs).Count -eq 0)
+    Check 'F context agent'      ($launchContext.Agent -eq 'omp')
+    Check 'F context root'       ($launchContext.Root -eq [System.IO.Path]::GetFullPath($Projects))
+    $previousLocation = Get-Location
+    try {
+        Set-Location -LiteralPath (Join-Path $Projects 'epsilon')
+        $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+    } finally { Set-Location -LiteralPath $previousLocation }
     $j = $out -join ' '
     Check 'F launcher fresh prompt' (($j -match '\[omp-stub\] args="hi there"') -and -not ($j -match 'args=-c'))
-    Check 'F env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_ROOT) -and (-not $env:LNCH_VERBS))
+    Check 'F context consumed' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $launchId)))
 
-    Write-Host '=== F2: existing project handoff resumes ==='
+    Write-Host '=== F2: existing project envelope resumes ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $out = & $__lnchFn alpha
-    Check 'F2 not fresh' (-not $env:LNCH_FRESH)
-    $out = & $__lnchFn -FromLauncher
+    $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
+    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
+    Check 'F2 not fresh' (-not $launchContext.Fresh)
+    $previousLocation = Get-Location
+    try {
+        Set-Location -LiteralPath (Join-Path $Projects 'alpha')
+        $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+    } finally { Set-Location -LiteralPath $previousLocation }
     Check 'F2 resumes' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
 
     Write-Host '=== G: root escape rejected ==='
@@ -133,18 +160,22 @@ try {
     $out = & $__lnchFn jay p -yolo -Here
     Check 'J bare plain'   (($out -join ' ') -match '\[bare-stub\] args=p')
 
-    Write-Host '=== K: yolo rides the tab handoff ==='
+    Write-Host '=== K: yolo rides the launch envelope ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $out = & $__lnchFn kappa go -yolo
-    $j = $out -join ' '
-    Check 'K handed off'   ($j -match 'WT-STUB -w 0 new-tab --title kappa --suppressApplicationTitle')
-    Check 'K env yolo'     ($env:LNCH_YOLO -eq '1')
-    Check 'K env agent'    ($env:LNCH_AGENT -eq 'omp')
-    Check 'K env fresh'    ($env:LNCH_FRESH -eq '1')
-    Check 'K env verbs'    ($env:LNCH_VERBS -match '"Name":"yolo"')
-    $out = & $__lnchFn -FromLauncher
+    $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
+    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
+    Check 'K handed off'   (-not [string]::IsNullOrWhiteSpace($launchId))
+    Check 'K agent'        ($launchContext.Agent -eq 'omp')
+    Check 'K fresh'        ($launchContext.Fresh)
+    Check 'K verbs'        (@($launchContext.Verbs | Where-Object Name -eq 'yolo').Count -eq 1)
+    $previousLocation = Get-Location
+    try {
+        Set-Location -LiteralPath (Join-Path $Projects 'kappa')
+        $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+    } finally { Set-Location -LiteralPath $previousLocation }
     $j = $out -join ' '
     Check 'K fresh+yolo+prompt' (($j -match '\[omp-stub\] args=--approval-mode yolo go') -and -not ($j -match 'args=-c'))
-    Check 'K env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_YOLO) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_ROOT) -and (-not $env:LNCH_VERBS))
 
     Write-Host '=== L: default agent persisted and honored ==='
     & $__lnchFn -SetDefaultAgent claude
@@ -205,7 +236,7 @@ try {
     Check 'S2 resume preserved' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
     Write-Host '=== T: post-create hook runs in fresh project ==='
     @'
-{ "defaultAgent": "omp", "postCreate": ["Set-Content hooked.txt -Value hooked"] }
+{ "defaultAgent": "omp", "postCreate": ["Set-Content hooked.txt -Value hooked"], "terminal": { "readinessTimeoutMs": 0 } }
 '@ | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
     $out = & $__lnchFn wabbit build it -Here 2>&1
     Check 'T hook ran'     (Test-Path (Join-Path $Projects 'wabbit\hooked.txt'))
@@ -238,16 +269,20 @@ try {
     try {
         Set-Location -LiteralPath $caller
         Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
         $dynamicRoot = [System.IO.Path]::GetFullPath((Join-Path $caller 'projects'))
         $dynamicProject = Join-Path $dynamicRoot 'dynamic-tab'
         $out = & $__lnchFn dynamic-tab hi -Agent omp
-        Check 'U2 root handed off' ($env:LNCH_ROOT -eq $dynamicRoot)
+        $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
+        $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
+        Check 'U2 root handed off' ($launchContext.Root -eq $dynamicRoot)
         Set-Location -LiteralPath $dynamicProject
-        $out = & $__lnchFn -FromLauncher
+        $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
         $joined = $out -join ' '
         Check 'U2 original project cwd' ($joined -match [regex]::Escape("[omp-stub] cwd=$dynamicProject"))
         Check 'U2 no recursive project' (-not (Test-Path -LiteralPath (Join-Path $dynamicProject 'projects\dynamic-tab')))
-        Check 'U2 root env cleared' (-not $env:LNCH_ROOT)
+        Check 'U2 context consumed' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $launchId)))
+        Check 'U2 post-create hook' (Test-Path -LiteralPath (Join-Path $dynamicProject 'hooked.txt'))
     } finally {
         Set-Location -LiteralPath $originalLocation
         if ($originalRoot) { $env:LNCH_PROJECTS_DIR = $originalRoot }
@@ -490,7 +525,7 @@ try {
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK, Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
+    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_RUNTIME_DIR, Env:LNCH_WT_LOG, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK, Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 

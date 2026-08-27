@@ -35,12 +35,13 @@
 #             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.3.2'
+$script:LnchVersion = '1.4.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
 . (Join-Path $script:LnchRoot 'ProjectDiscovery.ps1')
 . (Join-Path $script:LnchRoot 'SessionDiscovery.ps1')
+. (Join-Path $script:LnchRoot 'WindowsTerminal.ps1')
 . (Join-Path $script:LnchRoot 'TranscriptDiscovery.ps1')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
@@ -190,9 +191,14 @@ function global:Set-LnchDefaultAgent {
     $dir = Get-LnchConfigPath
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $p = Join-Path $dir 'config.json'
-    $payload = @{ defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() } }
+    $payload = [ordered]@{}
+    $existing = Get-LnchUserConfig
+    if ($existing) {
+        foreach ($property in $existing.PSObject.Properties) { $payload[$property.Name] = $property.Value }
+    }
+    $payload.defaultAgent = if ([string]::IsNullOrWhiteSpace($Agent)) { $null } else { $Agent.Trim() }
     if ($PSCmdlet.ShouldProcess($p, 'write default agent config')) {
-        $payload | ConvertTo-Json | Set-Content -LiteralPath $p -Encoding utf8
+        $payload | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $p -Encoding utf8
     }
     if ([string]::IsNullOrWhiteSpace($Agent)) { Write-Host 'default agent cleared' }
     else { Write-Host "default agent set to '$($Agent.Trim())'" }
@@ -523,6 +529,10 @@ function global:lnch {
         [switch]$Yolo,
         [switch]$Here,
         [switch]$FromLauncher,
+        [string]$LaunchId,
+        [string]$RuntimeRoot,
+        [object]$LaunchBatch,
+        [string]$ResolvedRoot,
         [string]$Agent,
         [string]$SetDefaultAgent,
         [switch]$Doctor,
@@ -530,6 +540,15 @@ function global:lnch {
         [switch]$Sessions,
         [switch]$IncludeChildren,
         [string]$Transcript,
+        [switch]$Tabs,
+        [switch]$Prune,
+        [string]$TerminalMode,
+        [string]$TerminalWindow,
+        [string]$TerminalProfile,
+        [string]$TerminalTitle,
+        [string]$TabColor,
+        [string]$ColorScheme,
+        [Nullable[int]]$ReadinessTimeoutMs,
         [switch]$Json,
         [switch]$Version
     )
@@ -549,6 +568,10 @@ function global:lnch {
     }
     if ($Transcript) {
         Show-LnchSessionTranscript -Reference $Transcript -Agent $Agent -Json:$Json
+        return
+    }
+    if ($Tabs) {
+        Show-LnchTerminalSessions -Json:$Json -Prune:$Prune
         return
     }
     if ($PSBoundParameters.ContainsKey('SetDefaultAgent')) {
@@ -596,18 +619,18 @@ function global:lnch {
     }
 
     $yoloWanted = [bool]$Yolo
+    $launcherContext = $null
 
     if ($FromLauncher) {
-        # relaunched inside the new tab; state travels via inherited env vars
-        $Name             = $env:LNCH_NAME
-        $raw              = $env:LNCH_PROMPT
-        $Prompt           = if ($raw) { @($raw -split '\s+' | Where-Object { $_ }) } else { $null }
-        $yoloWanted       = ($env:LNCH_YOLO -eq '1')
-        $launcherAgent    = $env:LNCH_AGENT
-        $launcherFresh    = ($env:LNCH_FRESH -eq '1')
-        $launcherRoot     = $env:LNCH_ROOT
-        $launcherVerbJson = $env:LNCH_VERBS
-        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
+        if ($RuntimeRoot) { $env:LNCH_RUNTIME_DIR = [System.IO.Path]::GetFullPath($RuntimeRoot) }
+        if (-not $LaunchId) { throw 'FromLauncher requires LaunchId' }
+        $launcherContext = Receive-LnchLaunchContext -LaunchId $LaunchId
+        $Name             = [string]$launcherContext.Name
+        $Prompt           = @($launcherContext.Prompt)
+        $launcherAgent    = [string]$launcherContext.Agent
+        $launcherFresh    = [bool]$launcherContext.Fresh
+        $launcherRoot     = [string]$launcherContext.Root
+        $launcherVerbs    = @($launcherContext.Verbs)
     } else {
         Show-LnchUpdateNotice
     }
@@ -622,7 +645,11 @@ function global:lnch {
             $v = $t.TrimStart(':').Trim()
             if ($script:KnownVerbs -contains $v) {
                 if ($v -eq 'model') {
-                    if ($i + 1 -ge $Prompt.Count) { Write-Error ':model requires a value (e.g. :model opus)'; return }
+                    if ($i + 1 -ge $Prompt.Count) {
+                        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage ':model requires a value' | Out-Null }
+                        Write-Error ':model requires a value (e.g. :model opus)'
+                        return
+                    }
                     $i++
                     $verbs.Add([pscustomobject]@{ Name = 'model'; Value = $Prompt[$i] })
                     $i++
@@ -637,14 +664,9 @@ function global:lnch {
         $i++
     }
     $Prompt = @($kept)
-    if ($launcherVerbJson) {
-        try {
-            $restoredVerbPayload = $launcherVerbJson | ConvertFrom-Json
-            foreach ($launcherVerb in @($restoredVerbPayload.Verbs)) {
-                if ($launcherVerb) { $verbs.Add($launcherVerb) }
-            }
-        } catch {
-            Write-Warning "could not restore launcher capabilities: $_"
+    if ($launcherVerbs) {
+        foreach ($launcherVerb in $launcherVerbs) {
+            if ($launcherVerb) { $verbs.Add($launcherVerb) }
         }
     }
     if ($yoloWanted -and -not ($verbs | Where-Object { $_.Name -eq 'yolo' })) {
@@ -652,12 +674,15 @@ function global:lnch {
     }
 
     try {
-        $rootFull = if ($FromLauncher -and $launcherRoot) {
+        $rootFull = if ($FromLauncher) {
             [System.IO.Path]::GetFullPath($launcherRoot)
+        } elseif ($ResolvedRoot) {
+            [System.IO.Path]::GetFullPath($ResolvedRoot)
         } else {
             Get-LnchProjectsRoot
         }
     } catch {
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage "projects root is invalid: $_" | Out-Null }
         Write-Error "projects root is invalid: $_"
         return
     }
@@ -675,11 +700,33 @@ function global:lnch {
             }
             $forwardPrompt += @($Prompt)
             $startFn = ${function:lnch}
+            $batch = New-Object System.Collections.ArrayList
             foreach ($selectedProject in $selectedProjects) {
-                $invoke = @{ Name = $selectedProject; Here = [bool]$Here }
+                $invoke = @{ Name = $selectedProject; Here = [bool]$Here; LaunchBatch = $batch; ResolvedRoot = $rootFull }
                 if ($Agent) { $invoke.Agent = $Agent }
                 if ($forwardPrompt.Count -gt 0) { $invoke.Prompt = [string[]]$forwardPrompt }
+                foreach ($override in @(
+                    @{ Key = 'TerminalMode'; Value = $TerminalMode },
+                    @{ Key = 'TerminalWindow'; Value = $TerminalWindow },
+                    @{ Key = 'TerminalProfile'; Value = $TerminalProfile },
+                    @{ Key = 'TerminalTitle'; Value = $TerminalTitle },
+                    @{ Key = 'TabColor'; Value = $TabColor },
+                    @{ Key = 'ColorScheme'; Value = $ColorScheme }
+                )) { if ($override.Value) { $invoke[$override.Key] = $override.Value } }
+                if ($null -ne $ReadinessTimeoutMs) { $invoke.ReadinessTimeoutMs = $ReadinessTimeoutMs }
                 & $startFn @invoke
+            }
+            if ($batch.Count -gt 0) {
+                $launchResults = @(Invoke-LnchWindowsTerminal -Contexts $batch.ToArray())
+                foreach ($launchResult in $launchResults) {
+                    if ($launchResult.Accepted) {
+                        if (-not $launchResult.Ready) { Write-Warning "terminal accepted $($launchResult.Context.Name), but child readiness timed out (launch $($launchResult.Context.LaunchId))" }
+                        else { Write-Host "-> $($launchResult.Context.Name) opened in Windows Terminal" }
+                    } else {
+                        Write-Warning "$($launchResult.Error); launching $($launchResult.Context.Name) inline"
+                        & $startFn -FromLauncher -LaunchId $launchResult.Context.LaunchId -RuntimeRoot $launchResult.Context.RuntimeRoot
+                    }
+                }
             }
             return
         }
@@ -698,6 +745,15 @@ function global:lnch {
     if (-not $dir.StartsWith($rootFull.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
         Write-Error "'$Name' escapes the projects root ($rootFull)"
         return
+    }
+
+    if ($launcherContext) {
+        $expectedDirectory = [System.IO.Path]::GetFullPath([string]$launcherContext.Directory)
+        if (-not $dir.Equals($expectedDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage "launch directory mismatch: expected $expectedDirectory got $dir" | Out-Null
+            throw "launch directory mismatch: expected $expectedDirectory got $dir"
+        }
+        Write-LnchTerminalReceipt -Context $launcherContext -State child-started | Out-Null
     }
 
     $isNew = -not (Test-Path -LiteralPath $dir)
@@ -745,28 +801,31 @@ function global:lnch {
     }
 
     if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage 'git not found in PATH' | Out-Null }
         Write-Error 'git not found in PATH'
         return
     }
     if (-not (Test-Path -LiteralPath (Join-Path $dir '.git'))) {
         git -C $dir init -b main
         if ($LASTEXITCODE -ne 0) { git -C $dir init }   # pre-2.28 fallback
-        if ($LASTEXITCODE -ne 0) { Write-Error 'git init failed'; return }
+        if ($LASTEXITCODE -ne 0) {
+            if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage 'git init failed' | Out-Null }
+            Write-Error 'git init failed'
+            return
+        }
         Write-Host 'initialized git repo'
     }
 
     # --- agent resolution -------------------------------------------------
-    if (-not $freshSession) {
+    if ($FromLauncher -and $launcherAgent) {
+        $agent = $launcherAgent
+    } elseif (-not $freshSession) {
         $agent = Get-ProjectAgent -Dir $dir
     } else {
         $installed = @($script:AgentProfiles.Keys | Where-Object {
             @(Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue).Count -gt 0
         } | Sort-Object)
         if ($Agent) {
-            if (-not $script:AgentProfiles.ContainsKey($Agent)) {
-                Write-Error "unknown agent '$Agent' (known: $($script:AgentProfiles.Keys -join ', '))"
-                return
-            }
             if (($installed | Where-Object { $_ -eq $Agent }).Count -eq 0) {
                 Write-Warning "'$Agent' is registered but not found on PATH; launching anyway"
             }
@@ -791,37 +850,42 @@ function global:lnch {
             }
         }
     }
+    if (-not $script:AgentProfiles.ContainsKey($agent)) {
+        $message = "unknown agent '$agent' (known: $($script:AgentProfiles.Keys -join ', '))"
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage $message | Out-Null }
+        Write-Error $message
+        return
+    }
     Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
 
 
-    # default: hand off to a fresh Windows Terminal tab
-    $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
-    if (-not $FromLauncher -and -not $Here -and $wt) {
-        $env:LNCH_NAME   = $Name
-        $env:LNCH_PROMPT = if ($Prompt) { $Prompt -join ' ' } else { '' }
-        $env:LNCH_YOLO   = if ($yoloWanted) { '1' } else { '' }
-        $env:LNCH_AGENT  = $agent
-        $env:LNCH_FRESH  = if ($isNew) { '1' } else { '' }
-        $env:LNCH_ROOT   = $rootFull
-        $verbPayload = @()
-        foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
-        $env:LNCH_VERBS = ConvertTo-Json -InputObject @{ Verbs = $verbPayload } -Depth 4 -Compress
-        $sh = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
-        $shellExe = if ($sh) { $sh.Source } else { Join-Path $PSHOME 'powershell.exe' }
-        $launcher = Join-Path $script:LnchRoot 'Lnch-InTab.ps1'
-        $tabTitle = Split-Path -Path $dir -Leaf
-        & $wt.Source -w 0 new-tab --title $tabTitle --suppressApplicationTitle -d $dir $shellExe -NoProfile -ExecutionPolicy Bypass -File $launcher
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "-> $(Split-Path -Path $dir -Leaf) opened in a new terminal tab"
+    # default: hand off through the Windows Terminal adapter
+    if (-not $FromLauncher) {
+        $requestedMode = if ($Here) { 'inline' } else { $TerminalMode }
+        $terminal = Get-LnchTerminalConfig -Mode $requestedMode -Window $TerminalWindow -ProfileName $TerminalProfile -TitleTemplate $TerminalTitle -TabColor $TabColor -ColorScheme $ColorScheme -ReadinessTimeoutMs $ReadinessTimeoutMs -Agent $agent
+        if ($terminal.Mode -ne 'inline') {
+            $verbPayload = @()
+            foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
+            $context = New-LnchLaunchContext -Name $Name -Directory $dir -Root $rootFull -Agent $agent -Prompt @($Prompt) -Verbs $verbPayload -Fresh $isNew -Terminal $terminal
+            if ($null -ne $LaunchBatch) {
+                $LaunchBatch.Add($context) | Out-Null
+                return
+            }
+            $launchResult = @(Invoke-LnchWindowsTerminal -Contexts @($context))[0]
+            if ($launchResult.Accepted) {
+                if (-not $launchResult.Ready) { Write-Warning "terminal accepted $Name, but child readiness timed out (launch $($context.LaunchId))" }
+                else { Write-Host "-> $Name opened in Windows Terminal" }
+                return
+            }
+            Write-Warning "$($launchResult.Error); launching inline instead"
+            & ${function:lnch} -FromLauncher -LaunchId $context.LaunchId -RuntimeRoot $context.RuntimeRoot
             return
         }
-        Write-Warning "wt exited with $($LASTEXITCODE); launching inline instead"
-        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
     }
 
     Set-Location -LiteralPath $dir
     # --- post-create hooks (fresh projects only) ---------------------------
-    if ($isNew) {
+    if ($freshSession) {
         foreach ($h in (Get-LnchPostCreateHook)) {
             Write-Host "post-create hook: $h"
             try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
@@ -864,7 +928,18 @@ function global:lnch {
 
     $verb = if ($resuming) { 'resuming' } else { 'starting' }
     Write-Host ("{0} {1} with {2} {3}" -f $verb, (Split-Path -Path $dir -Leaf), $agent, ($agentArgs -join ' '))
-    & $agent @agentArgs
+    if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-running | Out-Null }
+    $agentFailed = $false
+    try {
+        & $agent @agentArgs
+        $agentExitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+    } catch {
+        $agentFailed = $true
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage ([string]$_) | Out-Null }
+        throw
+    } finally {
+        if ($launcherContext -and -not $agentFailed) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-exited -ExitCode $agentExitCode | Out-Null }
+    }
 }
 
 # <Tab> completes project names from the projects root

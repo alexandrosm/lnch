@@ -41,8 +41,8 @@ New-Item -ItemType Directory -Force -Path $proj | Out-Null
 # redirected user-config: deterministic omp default across all fresh cases
 $env:LNCH_CONFIG_DIR = Join-Path ([IO.Path]::GetTempPath()) ('ps-shim-cfg-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $env:LNCH_CONFIG_DIR | Out-Null
-@{ defaultAgent = 'omp' } |
-    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
+@{ defaultAgent = 'omp'; terminal = @{ readinessTimeoutMs = 0 } } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
 
 # agents.json fixture: back up a real one, install ours, restore afterwards
 $registryPath = Join-Path $LnchRoot 'agents.json'
@@ -56,6 +56,8 @@ $registryBackup = if (Test-Path $registryPath) { Get-Content -Raw $registryPath 
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
 
 $env:LNCH_PROJECTS_DIR = $proj
+$env:LNCH_RUNTIME_DIR = Join-Path $env:LNCH_CONFIG_DIR 'runtime'
+$env:LNCH_WT_LOG = Join-Path $env:LNCH_CONFIG_DIR 'wt.log'
 $env:LNCH_INSTALL_DIR = $LnchRoot
 
 function BashRun([string]$body) {
@@ -118,12 +120,14 @@ try {
     Check E-picker (($out -match '\[omp-stub\]') -and ($out -match 'args=-c\b')) $out
 
     Write-Host '=== E2: multi-project picker through bash face ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $env:LNCH_TEST_FZF_MULTI = '1'
     $out = BashRun 'lnch'
     Remove-Item Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
-    Check E2-theta ($out -match 'WT-STUB -w 0 new-tab --title theta ') $out
-    Check E2-alpha ($out -match 'WT-STUB -w 0 new-tab --title alpha ') $out
-    Check E2-count ([regex]::Matches($out, 'WT-STUB').Count -eq 2) $out
+    $wtOut = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+    Check E2-theta ($wtOut -match 'new-tab .*--title theta ') $wtOut
+    Check E2-alpha ($wtOut -match 'new-tab .*--title alpha ') $wtOut
+    Check E2-count (([regex]::Matches($wtOut, '^WT-STUB', [System.Text.RegularExpressions.RegexOptions]::Multiline).Count -eq 1) -and ([regex]::Matches($wtOut, 'new-tab').Count -eq 2)) $wtOut
 
     Write-Host '=== G: root escape rejected ==='
     BashRun 'lnch ../evil --here' *> $null
@@ -141,11 +145,15 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $proj 'jay') | Out-Null
     Set-Content -LiteralPath (Join-Path $proj 'jay\.lnch.json') -Value '{"agent":"bare","updated":"2026-01-01T00:00:00Z"}'
     $out = BashRun 'lnch jay p --yolo --here'
-    Check J-noflags ($out -match '\[bare-stub\] args=p')
+    Check J-noflags ($out -match '\[bare-stub\] args=p') $out
 
-    Write-Host '=== F: tab handoff reaches wt stub ==='
-    $out = BashRun 'lnch kappa go'
-    Check F-handoff (($out -match 'WT-STUB -w 0 new-tab --title kappa --suppressApplicationTitle') -and ($out -match 'Lnch-InTab\.ps1'))
+    Write-Host '=== F: terminal policy flags reach wt stub ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
+    $out = BashRun 'lnch kappa go --terminal split-right --window lnch --profile OmpProfile --title-template {project}-{agent} --tab-color \#ABC --color-scheme Campbell --readiness-timeout 0'
+    $wtOut = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+    Check F-handoff (($wtOut -match '--window lnch split-pane --vertical') -and ($wtOut -match '--profile OmpProfile') -and ($wtOut -match '--title kappa-omp') -and ($wtOut -match '--tabColor #ABC') -and ($wtOut -match '--colorScheme Campbell') -and ($wtOut -match 'Lnch-InTab\.ps1')) $wtOut
+    $out = BashRun 'lnch --tabs --json'
+    Check TABS-bash (($out -match '"Schema"\s*:\s*1') -and ($out -match '"Sessions"\s*:')) $out
 
     Write-Host '=== DISC: datastore discovery through bash face ==='
     $out = BashRun 'lnch --discover --json'
@@ -171,7 +179,7 @@ try {
     if ($null -ne $registryBackup) { Set-Content -LiteralPath $registryPath -Value $registryBackup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
     $cfgDir = $env:LNCH_CONFIG_DIR
-    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
+    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_RUNTIME_DIR, Env:LNCH_WT_LOG, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
     if ($cfgDir) { Remove-Item -Recurse -Force $cfgDir -ErrorAction SilentlyContinue }
 }
 

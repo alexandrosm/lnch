@@ -24,6 +24,10 @@ jobs:
       - name: Engine matrix (Windows PowerShell 5.1)
         shell: powershell
         run: tests/run-tests.ps1
+      - name: Windows Terminal adapter contracts
+        shell: powershell
+        run: tests/run-tests-terminal.ps1
+
 
       - name: Cross-shell shims (pwsh + Git-bash/cmd children)
         shell: pwsh

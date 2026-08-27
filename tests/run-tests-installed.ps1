@@ -1,4 +1,4 @@
-# Installed-product acceptance: clean config, ordinary command, real child PowerShell.
+# Installed-product acceptance: clean config, real child PowerShell, and terminal lifecycle.
 param([string]$InstallDir = (Join-Path $env:USERPROFILE '.lnch'))
 $ErrorActionPreference = 'Stop'
 
@@ -8,17 +8,23 @@ if (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'Lnch.ps1'))) {
 }
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('lnch-installed-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-$cleanHome = Join-Path $testRoot 'home'
+$omega = [char]0x03A9
+$cleanHome = Join-Path $testRoot ("home with spaces " + $omega)
 $projectRoot = Join-Path $cleanHome 'projects'
-$project = Join-Path $projectRoot 'existing'
+$existingProject = Join-Path $projectRoot 'existing'
+$explicitRoot = Join-Path $testRoot ("explicit root " + $omega)
+$freshProject = Join-Path $explicitRoot 'fresh'
 $configDir = Join-Path $testRoot 'config-that-does-not-exist'
+$runtimeDir = Join-Path $testRoot 'runtime'
 $bin = Join-Path $testRoot 'bin'
-$log = Join-Path $testRoot 'agent.log'
-$wtHelper = Join-Path $testRoot 'wt-child.ps1'
+$agentLog = Join-Path $testRoot 'agent.log'
+$wtLog = Join-Path $testRoot 'wt.log'
+$sessionsFile = Join-Path $testRoot 'sessions.json'
+${wtExe} = Join-Path $bin 'wt.exe'
 $runner = Join-Path $testRoot 'invoke-lnch.ps1'
 
 $envNames = @(
-    'PATH', 'LNCH_ACCEPTANCE_LOG', 'LNCH_CONFIG_DIR', 'LNCH_NO_UPDATE_CHECK',
+    'PATH', 'LNCH_ACCEPTANCE_LOG', 'LNCH_ACCEPTANCE_WT_LOG', 'LNCH_CONFIG_DIR', 'LNCH_RUNTIME_DIR', 'LNCH_NO_UPDATE_CHECK',
     'LNCH_PROJECTS_DIR', 'LNCH_NAME', 'LNCH_PROMPT', 'LNCH_YOLO', 'LNCH_AGENT',
     'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS'
 )
@@ -26,56 +32,137 @@ $before = @{}
 foreach ($name in $envNames) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 try {
-    New-Item -ItemType Directory -Force -Path $cleanHome, $project, $bin | Out-Null
-    git -C $project init -b main | Out-Null
-    if ($LASTEXITCODE -ne 0) { git -C $project init | Out-Null }
+    New-Item -ItemType Directory -Force -Path $cleanHome, $existingProject, $explicitRoot, $bin | Out-Null
+    git -C $existingProject init -b main | Out-Null
+    if ($LASTEXITCODE -ne 0) { git -C $existingProject init | Out-Null }
     if ($LASTEXITCODE -ne 0) { throw 'could not initialize acceptance project' }
     @{ agent = 'omp'; intent = 'existing acceptance project'; created = (Get-Date).ToString('o'); updated = (Get-Date).ToString('o') } |
         ConvertTo-Json |
-        Set-Content -LiteralPath (Join-Path $project '.lnch.json') -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $existingProject '.lnch.json') -Encoding utf8
 
-    @'
-@echo off
->>"%LNCH_ACCEPTANCE_LOG%" echo CWD=%CD%
->>"%LNCH_ACCEPTANCE_LOG%" echo ARGS=%*
-exit /b 0
-'@ | Set-Content -LiteralPath (Join-Path $bin 'omp.cmd') -Encoding ascii
+    $agentStubSource = @'
+using System;
+using System.IO;
+using System.Text;
 
-    @"
-@echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$wtHelper" %*
-exit /b %ERRORLEVEL%
-"@ | Set-Content -LiteralPath (Join-Path $bin 'wt.cmd') -Encoding ascii
-
-    @'
-$ErrorActionPreference = 'Stop'
-$values = @($args)
-$directoryIndex = [Array]::IndexOf($values, '-d')
-if ($directoryIndex -lt 0 -or $directoryIndex + 2 -ge $values.Count) { throw 'wt acceptance stub did not receive -d <dir> <command>' }
-$directory = $values[$directoryIndex + 1]
-$command = $values[$directoryIndex + 2]
-$commandArgs = @($values[($directoryIndex + 3)..($values.Count - 1)])
-Push-Location -LiteralPath $directory
-try {
-    & $command @commandArgs
-    if ($LASTEXITCODE) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
+public static class AgentStub
+{
+    public static int Main(string[] args)
+    {
+        string[] encodedArgs = new string[args.Length];
+        for (int i = 0; i < args.Length; i++)
+            encodedArgs[i] = Convert.ToBase64String(Encoding.UTF8.GetBytes(args[i]));
+        string record =
+            "CWD64=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(Directory.GetCurrentDirectory())) + Environment.NewLine +
+            "ARGS64=" + String.Join(",", encodedArgs) + Environment.NewLine;
+        File.AppendAllText(Environment.GetEnvironmentVariable("LNCH_ACCEPTANCE_LOG"), record, new UTF8Encoding(false));
+        return 0;
+    }
 }
-'@ | Set-Content -LiteralPath $wtHelper -Encoding utf8
+'@
+    Add-Type -TypeDefinition $agentStubSource -OutputAssembly (Join-Path $bin 'omp.exe') -OutputType ConsoleApplication
+
+    $wtStubSource = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+
+public static class WtStub
+{
+    public static int Main(string[] args)
+    {
+        try
+        {
+            string log = Environment.GetEnvironmentVariable("LNCH_ACCEPTANCE_WT_LOG");
+            string[] encoded = new string[args.Length];
+            for (int i = 0; i < args.Length; i++)
+                encoded[i] = Convert.ToBase64String(Encoding.UTF8.GetBytes(args[i]));
+            File.AppendAllText(log, String.Join(",", encoded) + Environment.NewLine, new UTF8Encoding(false));
+
+            int directoryIndex = Array.IndexOf(args, "--startingDirectory");
+            if (directoryIndex < 0) directoryIndex = Array.IndexOf(args, "-d");
+            int noProfileIndex = Array.IndexOf(args, "-NoProfile");
+            if (directoryIndex < 0 || noProfileIndex < 1)
+                throw new InvalidOperationException("missing starting directory or child command");
+
+            ProcessStartInfo start = new ProcessStartInfo();
+            start.FileName = args[noProfileIndex - 1];
+            start.Arguments = JoinQuoted(args, noProfileIndex);
+            start.WorkingDirectory = args[directoryIndex + 1];
+            start.UseShellExecute = false;
+            Process child = Process.Start(start);
+            child.WaitForExit();
+            return child.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            return 1;
+        }
+    }
+
+    private static string JoinQuoted(string[] values, int start)
+    {
+        StringBuilder result = new StringBuilder();
+        for (int i = start; i < values.Length; i++)
+        {
+            if (result.Length > 0) result.Append(' ');
+            result.Append(Quote(values[i]));
+        }
+        return result.ToString();
+    }
+
+    private static string Quote(string value)
+    {
+        if (value.Length > 0 && value.IndexOfAny(new char[] { ' ', '\t', '\n', '\v', '"' }) < 0)
+            return value;
+        StringBuilder result = new StringBuilder();
+        result.Append('"');
+        int slashes = 0;
+        foreach (char current in value)
+        {
+            if (current == '\\') { slashes++; continue; }
+            if (current == '"')
+            {
+                result.Append('\\', slashes * 2 + 1);
+                result.Append('"');
+                slashes = 0;
+                continue;
+            }
+            result.Append('\\', slashes);
+            slashes = 0;
+            result.Append(current);
+        }
+        result.Append('\\', slashes * 2);
+        result.Append('"');
+        return result.ToString();
+    }
+}
+'@
+    Add-Type -TypeDefinition $wtStubSource -OutputAssembly $wtExe -OutputType ConsoleApplication
 
     @'
-param([string]$InstallDir, [string]$CleanHome)
+param([string]$InstallDir, [string]$CleanHome, [string]$ExplicitRoot, [string]$SessionsFile)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $InstallDir 'Lnch.ps1')
 Set-Item Function:\Get-LnchLatestReleaseTag -Value { 'v-installed-acceptance' }
 Set-Location -LiteralPath $CleanHome
 lnch existing
+$env:LNCH_PROJECTS_DIR = $ExplicitRoot
+try {
+    lnch -Name fresh -Prompt @('hello', 'installed') -Agent omp -TerminalMode tab -TerminalWindow lnch -TerminalProfile ('Power Shell ' + [char]0x03A9) -TerminalTitle '{project}:{agent}' -TabColor '#ABCDEF' -ColorScheme Campbell
+} finally {
+    Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue
+}
+lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
 '@ | Set-Content -LiteralPath $runner -Encoding utf8
 
     [Environment]::SetEnvironmentVariable('PATH', "$bin;$($before['PATH'])", 'Process')
-    [Environment]::SetEnvironmentVariable('LNCH_ACCEPTANCE_LOG', $log, 'Process')
+    [Environment]::SetEnvironmentVariable('LNCH_ACCEPTANCE_LOG', $agentLog, 'Process')
+    [Environment]::SetEnvironmentVariable('LNCH_ACCEPTANCE_WT_LOG', $wtLog, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_CONFIG_DIR', $configDir, 'Process')
+    [Environment]::SetEnvironmentVariable('LNCH_RUNTIME_DIR', $runtimeDir, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_NO_UPDATE_CHECK', $null, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_PROJECTS_DIR', $null, 'Process')
     foreach ($name in @('LNCH_NAME', 'LNCH_PROMPT', 'LNCH_YOLO', 'LNCH_AGENT', 'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS')) {
@@ -84,21 +171,70 @@ lnch existing
 
     $shell = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     if (-not $shell) { $shell = @(Get-Command powershell.exe -CommandType Application -ErrorAction Stop) | Select-Object -First 1 }
-    $output = @(& $shell.Source -NoProfile -ExecutionPolicy Bypass -File $runner -InstallDir $InstallDir -CleanHome $cleanHome 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw "installed journey process failed:`n$($output -join [Environment]::NewLine)" }
+    $savedPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& $shell.Source -NoProfile -ExecutionPolicy Bypass -File $runner -InstallDir $InstallDir -CleanHome $cleanHome -ExplicitRoot $explicitRoot -SessionsFile $sessionsFile 2>&1)
+        $journeyExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedPreference
+    }
+    if ($journeyExitCode -ne 0) { throw "installed journey process failed:`n$($output -join [Environment]::NewLine)" }
 
-    if (-not (Test-Path -LiteralPath $log -PathType Leaf)) { throw 'agent stub was not launched by the child process' }
-    $agentLog = Get-Content -LiteralPath $log -Raw
-    if ($agentLog -notmatch [regex]::Escape("CWD=$project")) { throw "child agent used the wrong cwd:`n$agentLog" }
-    if ($agentLog -notmatch 'ARGS=-c\b') { throw "existing project did not resume:`n$agentLog" }
-    if (Test-Path -LiteralPath (Join-Path $project 'projects\existing')) { throw 'recursive project path was created' }
+    if (-not (Test-Path -LiteralPath $agentLog -PathType Leaf)) { throw 'agent stub was not launched by the child process' }
+    $agentLines = @(Get-Content -LiteralPath $agentLog)
+    $agentCwds = @($agentLines | Where-Object { $_ -like 'CWD64=*' } | ForEach-Object {
+        [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Substring(6)))
+    })
+    $agentArguments = @($agentLines | Where-Object { $_ -like 'ARGS64=*' } | ForEach-Object {
+        $encoded = $_.Substring(7)
+        if ($encoded) { ,@($encoded -split ',' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }) } else { ,@() }
+    })
+    if ($agentCwds -notcontains $existingProject) { throw "existing child used the wrong cwd: $($agentCwds -join '; ')" }
+    if ($agentCwds -notcontains $freshProject) { throw "fresh child used the wrong cwd: $($agentCwds -join '; ')" }
+    if (-not @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq '-c' })) { throw 'existing project did not resume' }
+    if (-not @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq 'hello installed' })) { throw 'fresh prompt did not reach the agent' }
+    if (Test-Path -LiteralPath (Join-Path $existingProject 'projects\existing')) { throw 'recursive project path was created' }
+    if (-not (Test-Path -LiteralPath (Join-Path $freshProject '.git') -PathType Container)) { throw 'fresh explicit-root project was not initialized' }
+    if (-not (Test-Path -LiteralPath (Join-Path $freshProject 'AGENTS.md') -PathType Leaf)) { throw 'fresh project scaffold was not installed' }
+    $metadata = Get-Content -LiteralPath (Join-Path $freshProject '.lnch.json') -Raw | ConvertFrom-Json
+    if ($metadata.agent -ne 'omp' -or $metadata.intent -ne 'hello installed') { throw 'fresh project metadata did not preserve agent and prompt' }
+
     if (-not (Test-Path -LiteralPath (Join-Path $configDir 'update-cache.json') -PathType Leaf)) { throw 'first-run update cache was not written' }
-    if (($output -join ' ') -notmatch [regex]::Escape('-> existing opened in a new terminal tab')) { throw "parent launch did not complete:`n$($output -join [Environment]::NewLine)" }
+    $joinedOutput = $output -join ' '
+    if ($joinedOutput -notmatch [regex]::Escape('-> existing opened in Windows Terminal') -or $joinedOutput -notmatch [regex]::Escape('-> fresh opened in Windows Terminal')) {
+        throw "parent launches did not complete:`n$($output -join [Environment]::NewLine)"
+    }
+
+    $wtCalls = @(Get-Content -LiteralPath $wtLog | ForEach-Object {
+        $decoded = @($_ -split ',' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
+        Write-Output (, $decoded)
+    })
+    if ($wtCalls.Count -ne 2) { throw "expected two wt calls, found $($wtCalls.Count)" }
+    $freshWt = @($wtCalls | Where-Object { $_ -contains 'fresh:omp' })[0]
+    if (-not $freshWt) { throw 'fresh terminal title was not emitted' }
+    foreach ($required in @('--inheritEnvironment', '--window', 'lnch', '--profile', ('Power Shell ' + [char]0x03A9), '--tabColor', '#ABCDEF', '--colorScheme', 'Campbell')) {
+        if ($freshWt -notcontains $required) { throw "fresh terminal invocation omitted $required" }
+    }
+
+    $receipts = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDir 'sessions') -File -Filter '*.json' -ErrorAction SilentlyContinue)
+    if ($receipts.Count -ne 2) { throw "expected two terminal receipts, found $($receipts.Count)" }
+    $receiptValues = @($receipts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
+    if (@($receiptValues | Where-Object State -ne 'agent-exited').Count -ne 0) { throw 'terminal receipts did not reach agent-exited' }
+    if (@($receiptValues.Directory | Sort-Object -Unique).Count -ne 2) { throw 'terminal receipts did not retain both project directories' }
+    $sessionDocument = Get-Content -LiteralPath $sessionsFile -Raw | ConvertFrom-Json
+    if ($sessionDocument.Schema -ne 1 -or @($sessionDocument.Sessions).Count -ne 2) { throw 'lnch -Tabs did not report both terminal sessions' }
+    $pending = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDir 'launches') -File -Filter '*.json' -ErrorAction SilentlyContinue)
+    if ($pending.Count -ne 0) { throw 'consumed launch contexts were not removed' }
 
     Write-Host 'PASS installed clean-config cache write'
-    Write-Host 'PASS installed real child process'
-    Write-Host 'PASS installed dynamic root handoff'
-    Write-Host 'PASS installed existing-session resume'
+    Write-Host 'PASS installed real child processes'
+    Write-Host 'PASS installed dynamic and explicit roots'
+    Write-Host 'PASS installed paths with spaces and Unicode'
+    Write-Host 'PASS installed launch receipt lifecycle'
+    Write-Host 'PASS installed terminal presentation policy'
+    Write-Host 'PASS installed public terminal session ledger'
+    Write-Host 'PASS installed existing resume and fresh prompt'
     Write-Host 'RESULT: INSTALLED JOURNEY PASS'
 } finally {
     foreach ($name in $envNames) { [Environment]::SetEnvironmentVariable($name, $before[$name], 'Process') }
