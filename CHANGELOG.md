@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added an installed-product acceptance gate that exercises a clean first run and ordinary project launch through a real child PowerShell process; CI now tests both the checkout payload and a bootstrap from pushed `main`.
+
 ## v1.3.2
 
 - Fixed new-tab launches with a dynamic root by carrying the parent's resolved root into the child process, preventing accidental `<project>\\projects\\<project>` creation and false fresh sessions.

@@ -213,11 +213,14 @@ Windows. PowerShell 5.1 or 7+ (engine). Optional: Windows Terminal (`wt`) for ne
 
 ## Development
 
-Clone, then two bundled suites, both stubbed (touch only temp dirs + a redirected config dir):
+Clone, then run the bundled engine, cross-shell, and installed-product suites. All write only to temporary directories and redirected configuration:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1              # expanded engine matrix
-pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1   # shims + cmd lifecycle (18 checks)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-crossshell.ps1
+pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-installed.ps1 -InstallDir .
 ```
+
+The installed journey starts from a missing config directory, invokes the ordinary `lnch existing` command, crosses a real child PowerShell boundary with the tab cwd changed to the project, and asserts update-cache creation, exact root preservation, no recursive project, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install.
 
 PSScriptAnalyzer gates every push (settings: `tests/PSScriptAnalyzerSettings.psd1`). CI runs everything on `windows-latest`; tag pushes are packaged into GitHub Releases with SHA256SUMS (`scripts/release-local.ps1` reproduces that locally).

@@ -29,6 +29,10 @@ jobs:
         shell: pwsh
         run: tests/run-tests-crossshell.ps1
 
+      - name: Installed user journey (checkout payload)
+        shell: pwsh
+        run: ./tests/run-tests-installed.ps1 -InstallDir $env:GITHUB_WORKSPACE
+
       - name: Tagged Bash bootstrap archive smoke
         shell: bash
         run: bash tests/run-tests-bootstrap.sh
@@ -42,9 +46,10 @@ jobs:
       - name: Remote bootstrap smoke (published one-liner path)
         shell: pwsh
         run: |
-          # exercise the real download+install flow (fetches current main)
-          ./bootstrap.ps1
+          # exercise the real download+install flow against pushed main
+          ./bootstrap.ps1 -Version main
           $installed = Join-Path $env:USERPROFILE '.lnch'
           if (-not (Test-Path (Join-Path $installed 'Lnch.ps1'))) { throw 'bootstrap did not install the engine' }
           . (Join-Path $installed 'Lnch.ps1')
           if (-not (${function:lnch})) { throw 'installed engine did not define lnch' }
+          ./tests/run-tests-installed.ps1 -InstallDir $installed
