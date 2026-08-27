@@ -232,6 +232,86 @@ try {
         if ($originalRoot) { $env:LNCH_PROJECTS_DIR = $originalRoot }
         else { Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue }
     }
+
+    Write-Host '=== V: Level Zero agent datastore discovery ==='
+    $discoveryRoot = Join-Path $TestRoot 'agent-stores'
+    $discoveryEnvNames = @(
+        'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
+        'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
+        'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
+        'QWEN_HOME', 'QWEN_RUNTIME_DIR'
+    )
+    $discoveryEnvBefore = @{}
+    foreach ($envName in $discoveryEnvNames) {
+        $discoveryEnvBefore[$envName] = [Environment]::GetEnvironmentVariable($envName, 'Process')
+    }
+    try {
+        $ompStore = Join-Path $discoveryRoot 'omp-agent'
+        $claudeStore = Join-Path $discoveryRoot 'claude-home'
+        $codexStore = Join-Path $discoveryRoot 'codex-home'
+        $geminiBase = Join-Path $discoveryRoot 'gemini-base'
+        $openConfig = Join-Path $discoveryRoot 'opencode-config'
+        $openConfigFile = Join-Path $discoveryRoot 'opencode-extra.json'
+        $xdgData = Join-Path $discoveryRoot 'xdg-data'
+        $xdgCache = Join-Path $discoveryRoot 'xdg-cache'
+        $xdgState = Join-Path $discoveryRoot 'xdg-state'
+        $qwenStore = Join-Path $discoveryRoot 'qwen-home'
+        $qwenRuntime = Join-Path $discoveryRoot 'qwen-runtime'
+
+        foreach ($dir in @(
+            $ompStore, $claudeStore, $codexStore, (Join-Path $geminiBase '.gemini'),
+            $openConfig, (Join-Path $xdgData 'opencode'), (Join-Path $xdgCache 'opencode'),
+            (Join-Path $xdgState 'opencode'), $qwenStore, $qwenRuntime
+        )) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        }
+        Set-Content -LiteralPath $openConfigFile -Value '{}'
+
+        [Environment]::SetEnvironmentVariable('PI_CODING_AGENT_DIR', $ompStore, 'Process')
+        [Environment]::SetEnvironmentVariable('OMP_PROFILE', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', $claudeStore, 'Process')
+        [Environment]::SetEnvironmentVariable('CODEX_HOME', $codexStore, 'Process')
+        [Environment]::SetEnvironmentVariable('GEMINI_CLI_HOME', $geminiBase, 'Process')
+        [Environment]::SetEnvironmentVariable('OPENCODE_CONFIG_DIR', $openConfig, 'Process')
+        [Environment]::SetEnvironmentVariable('OPENCODE_CONFIG', $openConfigFile, 'Process')
+        [Environment]::SetEnvironmentVariable('XDG_DATA_HOME', $xdgData, 'Process')
+        [Environment]::SetEnvironmentVariable('XDG_CACHE_HOME', $xdgCache, 'Process')
+        [Environment]::SetEnvironmentVariable('XDG_STATE_HOME', $xdgState, 'Process')
+        [Environment]::SetEnvironmentVariable('QWEN_HOME', $qwenStore, 'Process')
+        [Environment]::SetEnvironmentVariable('QWEN_RUNTIME_DIR', $qwenRuntime, 'Process')
+
+        $inventory = @(Get-LnchAgentDatastores)
+        Check 'V seven agents' ($inventory.Count -eq 7)
+        Check 'V exact builtins' ((@($inventory.Agent | Sort-Object) -join ',') -eq 'aider,claude,codex,gemini,omp,opencode,qwen')
+
+        $ompInventory = $inventory | Where-Object Agent -eq 'omp'
+        $claudeInventory = $inventory | Where-Object Agent -eq 'claude'
+        $codexInventory = $inventory | Where-Object Agent -eq 'codex'
+        $geminiInventory = $inventory | Where-Object Agent -eq 'gemini'
+        $openInventory = $inventory | Where-Object Agent -eq 'opencode'
+        $qwenInventory = $inventory | Where-Object Agent -eq 'qwen'
+
+        Check 'V omp env root' (@($ompInventory.Datastores | Where-Object { $_.Source -eq 'PI_CODING_AGENT_DIR' -and $_.Path -eq $ompStore -and $_.Readable }).Count -eq 1)
+        Check 'V claude env root' (@($claudeInventory.Datastores | Where-Object { $_.Source -eq 'CLAUDE_CONFIG_DIR' -and $_.Path -eq $claudeStore -and $_.Readable }).Count -eq 1)
+        Check 'V codex env root' (@($codexInventory.Datastores | Where-Object { $_.Source -eq 'CODEX_HOME' -and $_.Path -eq $codexStore -and $_.Readable }).Count -eq 1)
+        Check 'V gemini env root' (@($geminiInventory.Datastores | Where-Object { $_.Source -eq 'GEMINI_CLI_HOME' -and $_.Path -eq (Join-Path $geminiBase '.gemini') -and $_.Readable }).Count -eq 1)
+        Check 'V opencode data root' (@($openInventory.Datastores | Where-Object { $_.Source -eq 'XDG_DATA_HOME' -and $_.Path -eq (Join-Path $xdgData 'opencode') -and $_.Readable }).Count -eq 1)
+        Check 'V opencode config file' (@($openInventory.Datastores | Where-Object { $_.Source -eq 'OPENCODE_CONFIG' -and $_.Path -eq $openConfigFile -and $_.PathType -eq 'file' }).Count -eq 1)
+        Check 'V qwen split roots' (
+            @($qwenInventory.Datastores | Where-Object { $_.Source -eq 'QWEN_HOME' -and $_.Path -eq $qwenStore }).Count -eq 1 -and
+            @($qwenInventory.Datastores | Where-Object { $_.Source -eq 'QWEN_RUNTIME_DIR' -and $_.Path -eq $qwenRuntime }).Count -eq 1
+        )
+
+        $jsonOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchDir 'entry.ps1') --discover --json 2>&1
+        $jsonDocument = $null
+        try { $jsonDocument = (($jsonOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
+        Check 'V entry JSON schema' ($jsonDocument -and $jsonDocument.Schema -eq 1)
+        Check 'V entry JSON agents' ($jsonDocument -and @($jsonDocument.Agents).Count -eq 7)
+    } finally {
+        foreach ($envName in $discoveryEnvNames) {
+            [Environment]::SetEnvironmentVariable($envName, $discoveryEnvBefore[$envName], 'Process')
+        }
+    }
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }

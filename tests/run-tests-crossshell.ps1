@@ -147,6 +147,10 @@ try {
     $out = BashRun 'lnch kappa go'
     Check F-handoff (($out -match 'WT-STUB -w 0 new-tab --title kappa --suppressApplicationTitle') -and ($out -match 'Lnch-InTab\.ps1'))
 
+    Write-Host '=== DISC: datastore discovery through bash face ==='
+    $out = BashRun 'lnch --discover --json'
+    Check DISC-bash (($out -match '"Schema"\s*:\s*1') -and ($out -match '"Agent"\s*:\s*"omp"')) $out
+
     Write-Host '=== CMD: AutoRun lifecycle + lnch-cli.cmd ==='
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchRoot 'install-cmd.ps1') | Out-Null
     $chk = AutoRunValue
@@ -154,6 +158,8 @@ try {
     $cli = Join-Path $LnchRoot 'shell\lnch-cli.cmd'
     $out = CmdRun ('"' + $cli + '" delta hi there --here')
     Check CMD-shim (($out -match '\[omp-stub\]') -and ($out -match 'hi there')) $out
+    $out = CmdRun ('"' + $cli + '" --discover --json')
+    Check DISC-cmd (($out -match '"Schema"\s*:\s*1') -and ($out -match '"Agent"\s*:\s*"codex"')) $out
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $LnchRoot 'install-cmd.ps1') -Remove | Out-Null
     $chk2 = AutoRunValue
     Check CMD-autorun-removed ((( $null -eq $chk2) -or (-not ($chk2 -match 'lnch'))))

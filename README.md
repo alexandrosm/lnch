@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.0.3   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.1.0   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -64,6 +64,8 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
 | `lnch -Version` / `--version` / `-v` | Print engine version |
 | `lnch -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
+| `lnch -Discover` / `--discover` | Locate the executable and private datastore candidates for all seven built-in agents |
+| `lnch -Discover -Json` / `--discover --json` | Emit the versioned discovery document for automation |
 
 
 Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata and opens in its own tab in the current Windows Terminal window.
@@ -137,6 +139,18 @@ Built-in registry: **omp, claude, codex, gemini, aider, opencode, qwen**. An opt
 v0.3-style entries (`continueArgs` / `yoloFlags` / `takesPromptOnContinue`) auto-migrate.
 
 Run `lnch -Doctor` for the live capability matrix on your machine.
+
+## Datastore discovery
+
+`lnch --discover` performs a read-only Level Zero inventory for **omp, claude, codex, gemini, aider, opencode, and qwen**. It resolves native environment overrides, OMP profiles, XDG roots, split Qwen config/runtime roots, OpenCode config/data/cache/state roots, executable paths, agent versions, existence, path type, and readability. Status is `ready`, `binary-only`, `store-only`, or `absent`; one unreadable or malformed location does not block the other agents.
+
+```powershell
+lnch --discover
+lnch --discover --json
+$inventory = Get-LnchAgentDatastores
+```
+
+Discovery never reads credential values or modifies an agent store. Aider is reported as partial because its chat history and repository-map cache are project-local rather than indexed by a global datastore.
 
 ## Agent state map
 

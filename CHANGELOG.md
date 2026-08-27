@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.1.0
 
+- Added read-only Level Zero discovery for all seven built-in agents: executable/version detection, environment and profile-aware datastore resolution, existence/readability health, human output, and a versioned JSON document across PowerShell, bash/zsh, and cmd.
 - Added an evidence-backed, machine-readable state map for all seven built-in agents, with explicit transcript, config, memory, checkpoint, index, cache, credential, and native interop policies.
 
 ## v1.0.3
