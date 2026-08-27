@@ -35,7 +35,7 @@
 #             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.3.1'
+$script:LnchVersion = '1.3.2'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
@@ -198,10 +198,21 @@ function global:Set-LnchDefaultAgent {
     else { Write-Host "default agent set to '$($Agent.Trim())'" }
 }
 
+function script:Get-LnchLatestReleaseTag {
+    (Invoke-RestMethod -Uri 'https://api.github.com/repos/alexandrosm/lnch/releases/latest' `
+        -TimeoutSec 3 -Headers @{ 'User-Agent' = 'lnch' }).tag_name
+}
+
 function script:Get-LnchUpdateNoticeState {
     # returns latest release tag or $null; caches for 24h; never throws
     if ($env:LNCH_NO_UPDATE_CHECK) { return $null }
-    $cacheFile = Join-Path (Get-LnchConfigPath) 'update-cache.json'
+    $cacheDir = Get-LnchConfigPath
+    try {
+        if (-not (Test-Path -LiteralPath $cacheDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+        }
+    } catch { return $null }
+    $cacheFile = Join-Path $cacheDir 'update-cache.json'
     if (Test-Path -LiteralPath $cacheFile) {
         try {
             $c = Get-Content -LiteralPath $cacheFile -Raw | ConvertFrom-Json
@@ -210,8 +221,7 @@ function script:Get-LnchUpdateNoticeState {
     }
     $latest = $null
     try {
-        $latest = (Invoke-RestMethod -Uri 'https://api.github.com/repos/alexandrosm/lnch/releases/latest' `
-            -TimeoutSec 3 -Headers @{ 'User-Agent' = 'lnch' }).tag_name
+        $latest = Get-LnchLatestReleaseTag
         @{ latest = $latest; checked = (Get-Date).ToString('o') } |
             ConvertTo-Json | Set-Content -LiteralPath $cacheFile -Encoding utf8
     } catch { }
@@ -595,8 +605,9 @@ function global:lnch {
         $yoloWanted       = ($env:LNCH_YOLO -eq '1')
         $launcherAgent    = $env:LNCH_AGENT
         $launcherFresh    = ($env:LNCH_FRESH -eq '1')
+        $launcherRoot     = $env:LNCH_ROOT
         $launcherVerbJson = $env:LNCH_VERBS
-        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS -ErrorAction SilentlyContinue
+        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
     } else {
         Show-LnchUpdateNotice
     }
@@ -641,7 +652,11 @@ function global:lnch {
     }
 
     try {
-        $rootFull = Get-LnchProjectsRoot
+        $rootFull = if ($FromLauncher -and $launcherRoot) {
+            [System.IO.Path]::GetFullPath($launcherRoot)
+        } else {
+            Get-LnchProjectsRoot
+        }
     } catch {
         Write-Error "projects root is invalid: $_"
         return
@@ -787,6 +802,7 @@ function global:lnch {
         $env:LNCH_YOLO   = if ($yoloWanted) { '1' } else { '' }
         $env:LNCH_AGENT  = $agent
         $env:LNCH_FRESH  = if ($isNew) { '1' } else { '' }
+        $env:LNCH_ROOT   = $rootFull
         $verbPayload = @()
         foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
         $env:LNCH_VERBS = ConvertTo-Json -InputObject @{ Verbs = $verbPayload } -Depth 4 -Compress
@@ -800,7 +816,7 @@ function global:lnch {
             return
         }
         Write-Warning "wt exited with $($LASTEXITCODE); launching inline instead"
-        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS -ErrorAction SilentlyContinue
+        Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
     }
 
     Set-Location -LiteralPath $dir

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.3.2
+
+- Fixed new-tab launches with a dynamic root by carrying the parent's resolved root into the child process, preventing accidental `<project>\\projects\\<project>` creation and false fresh sessions.
+- Fixed first-run update checks by creating `%APPDATA%\\lnch` before writing `update-cache.json`.
+
 ## v1.3.1
 
 - Fixed Codex session inflation by classifying spawned subagent threads as children, excluding them from default session/project counts, exposing parent/agent metadata and root `ChildCount`, and adding the explicit `--include-children` view.

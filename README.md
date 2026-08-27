@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.3.1   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.3.2   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -87,7 +87,7 @@ Without fzf, bare `lnch` opens a full-screen multi-select TUI with project name,
 With fzf, the launcher enables rounded borders, multi-select, inline status, selection markers, and `Ctrl-A`/`Ctrl-D` all/none bindings. Set `LNCH_NO_FZF=1` to force the built-in TUI.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
-By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly.
+By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly. The resolved root is captured before a Windows Terminal handoff and reused inside the child tab; changing the child tab's working directory never creates a recursive `<project>\projects\<project>` path.
 
 ### ⚠️ `-Yolo` safety
 

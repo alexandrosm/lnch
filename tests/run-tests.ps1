@@ -88,7 +88,7 @@ try {
     Check 'E2 theta tab' ($j -match 'WT-STUB -w 0 new-tab --title theta ')
     Check 'E2 alpha tab' ($j -match 'WT-STUB -w 0 new-tab --title alpha ')
     Check 'E2 exactly two' ([regex]::Matches($j, 'WT-STUB').Count -eq 2)
-    Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS -ErrorAction SilentlyContinue
+    Remove-Item Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS -ErrorAction SilentlyContinue
 
     Write-Host '=== E3: numbered multi-range parser ==='
     $indexes = @(ConvertFrom-LnchProjectSelection -Selection '1,3-4' -Count 5)
@@ -104,10 +104,11 @@ try {
     Check 'F fresh env'       ($env:LNCH_FRESH -eq '1')
     Check 'F verbs env'       ($env:LNCH_VERBS -match '"Verbs":\[\]')
     Check 'F agent env'       ($env:LNCH_AGENT -eq 'omp')
+    Check 'F root env'        ($env:LNCH_ROOT -eq [System.IO.Path]::GetFullPath($Projects))
     $out = & $__lnchFn -FromLauncher
     $j = $out -join ' '
     Check 'F launcher fresh prompt' (($j -match '\[omp-stub\] args="hi there"') -and -not ($j -match 'args=-c'))
-    Check 'F env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_VERBS))
+    Check 'F env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_ROOT) -and (-not $env:LNCH_VERBS))
 
     Write-Host '=== F2: existing project handoff resumes ==='
     $out = & $__lnchFn alpha
@@ -143,7 +144,7 @@ try {
     $out = & $__lnchFn -FromLauncher
     $j = $out -join ' '
     Check 'K fresh+yolo+prompt' (($j -match '\[omp-stub\] args=--approval-mode yolo go') -and -not ($j -match 'args=-c'))
-    Check 'K env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_YOLO) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_VERBS))
+    Check 'K env cleared' ((-not $env:LNCH_NAME) -and (-not $env:LNCH_YOLO) -and (-not $env:LNCH_FRESH) -and (-not $env:LNCH_ROOT) -and (-not $env:LNCH_VERBS))
 
     Write-Host '=== L: default agent persisted and honored ==='
     & $__lnchFn -SetDefaultAgent claude
@@ -231,6 +232,45 @@ try {
         Set-Location -LiteralPath $originalLocation
         if ($originalRoot) { $env:LNCH_PROJECTS_DIR = $originalRoot }
         else { Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue }
+    }
+
+    Write-Host '=== U2: dynamic root survives new-tab handoff ==='
+    try {
+        Set-Location -LiteralPath $caller
+        Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue
+        $dynamicRoot = [System.IO.Path]::GetFullPath((Join-Path $caller 'projects'))
+        $dynamicProject = Join-Path $dynamicRoot 'dynamic-tab'
+        $out = & $__lnchFn dynamic-tab hi -Agent omp
+        Check 'U2 root handed off' ($env:LNCH_ROOT -eq $dynamicRoot)
+        Set-Location -LiteralPath $dynamicProject
+        $out = & $__lnchFn -FromLauncher
+        $joined = $out -join ' '
+        Check 'U2 original project cwd' ($joined -match [regex]::Escape("[omp-stub] cwd=$dynamicProject"))
+        Check 'U2 no recursive project' (-not (Test-Path -LiteralPath (Join-Path $dynamicProject 'projects\dynamic-tab')))
+        Check 'U2 root env cleared' (-not $env:LNCH_ROOT)
+    } finally {
+        Set-Location -LiteralPath $originalLocation
+        if ($originalRoot) { $env:LNCH_PROJECTS_DIR = $originalRoot }
+        else { Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue }
+    }
+
+    Write-Host '=== W: update cache creates its config directory ==='
+    $configBeforeUpdateTest = $env:LNCH_CONFIG_DIR
+    $noUpdateBefore = $env:LNCH_NO_UPDATE_CHECK
+    $updateConfig = Join-Path $TestRoot 'missing-update-config'
+    $latestReleaseResolver = ${function:Get-LnchLatestReleaseTag}
+    try {
+        $env:LNCH_CONFIG_DIR = $updateConfig
+        Remove-Item Env:LNCH_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
+        Set-Item Function:\Get-LnchLatestReleaseTag -Value { 'v1.3.1-test' }
+        $latest = Get-LnchUpdateNoticeState
+        Check 'W latest returned' ($latest -eq 'v1.3.1-test')
+        Check 'W cache directory' (Test-Path -LiteralPath $updateConfig -PathType Container)
+        Check 'W cache file' (Test-Path -LiteralPath (Join-Path $updateConfig 'update-cache.json') -PathType Leaf)
+    } finally {
+        Set-Item Function:\Get-LnchLatestReleaseTag -Value $latestReleaseResolver
+        $env:LNCH_CONFIG_DIR = $configBeforeUpdateTest
+        $env:LNCH_NO_UPDATE_CHECK = $noUpdateBefore
     }
 
     Write-Host '=== V: Level Zero and One agent discovery ==='
@@ -450,7 +490,7 @@ try {
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK, Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
+    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK, Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 
