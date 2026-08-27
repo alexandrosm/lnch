@@ -31,7 +31,8 @@ try {
     $sha.Dispose()
 }
 $hash = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
-"$hash  lnch-$Tag.zip" | Set-Content SHA256SUMS
+$sumLine = "$hash  lnch-$Tag.zip`n"
+[System.IO.File]::WriteAllText((Join-Path $repoRoot 'SHA256SUMS'), $sumLine, (New-Object System.Text.UTF8Encoding($false)))
 
 $size = (Get-Item $zipPath).Length
 Write-Output ("packaged lnch-$Tag.zip ($size bytes)")
