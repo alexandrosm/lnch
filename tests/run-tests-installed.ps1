@@ -20,7 +20,10 @@ $bin = Join-Path $testRoot 'bin'
 $agentLog = Join-Path $testRoot 'agent.log'
 $wtLog = Join-Path $testRoot 'wt.log'
 $sessionsFile = Join-Path $testRoot 'sessions.json'
-${wtExe} = Join-Path $bin 'wt.exe'
+$wtExe = Join-Path $bin 'wt.exe'
+$compilerScript = Join-Path $testRoot 'compile-console-stub.ps1'
+$systemRoot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
+$windowsPowerShell = Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $runner = Join-Path $testRoot 'invoke-lnch.ps1'
 
 $envNames = @(
@@ -31,8 +34,23 @@ $envNames = @(
 $before = @{}
 foreach ($name in $envNames) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
+function New-LnchAcceptanceStub {
+    param([Parameter(Mandatory)][string]$Source, [Parameter(Mandatory)][string]$OutputPath)
+    $sourcePath = "$OutputPath.cs"
+    [IO.File]::WriteAllText($sourcePath, $Source, (New-Object Text.UTF8Encoding($false)))
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $compilerScript -SourcePath $sourcePath -OutputPath $OutputPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "could not compile acceptance stub $OutputPath"
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $cleanHome, $existingProject, $explicitRoot, $bin | Out-Null
+    @'
+param([Parameter(Mandatory)][string]$SourcePath, [Parameter(Mandatory)][string]$OutputPath)
+$ErrorActionPreference = 'Stop'
+Add-Type -Path $SourcePath -OutputAssembly $OutputPath -OutputType ConsoleApplication
+'@ | Set-Content -LiteralPath $compilerScript -Encoding ascii
     git -C $existingProject init -b main | Out-Null
     if ($LASTEXITCODE -ne 0) { git -C $existingProject init | Out-Null }
     if ($LASTEXITCODE -ne 0) { throw 'could not initialize acceptance project' }
@@ -60,7 +78,7 @@ public static class AgentStub
     }
 }
 '@
-    Add-Type -TypeDefinition $agentStubSource -OutputAssembly (Join-Path $bin 'omp.exe') -OutputType ConsoleApplication
+    New-LnchAcceptanceStub -Source $agentStubSource -OutputPath (Join-Path $bin 'omp.exe')
 
     $wtStubSource = @'
 using System;
@@ -140,7 +158,7 @@ public static class WtStub
     }
 }
 '@
-    Add-Type -TypeDefinition $wtStubSource -OutputAssembly $wtExe -OutputType ConsoleApplication
+    New-LnchAcceptanceStub -Source $wtStubSource -OutputPath $wtExe
 
     @'
 param([string]$InstallDir, [string]$CleanHome, [string]$ExplicitRoot, [string]$SessionsFile)
