@@ -140,6 +140,9 @@ try {
     Check 'E5 pretty frame' ($dashboardFrame -match 'LNCH TOP' -and $dashboardFrame -match 'usage-fixture' -and $dashboardFrame -match 'RUNNING' -and $dashboardFrame -match 'MODEL' -and $dashboardFrame -match 'COST')
     $topJson = ((& $__lnchFn -Top -Json) -join [Environment]::NewLine) | ConvertFrom-Json
     Check 'E5 top JSON' ($topJson.Schema -eq 1 -and @($topJson.Projects | Where-Object Name -eq 'usage-fixture').Count -eq 1)
+    $longTopPath = Join-Path $Projects '--top'
+    $longTopJson = ((& $__lnchFn --top --json) -join [Environment]::NewLine) | ConvertFrom-Json
+    Check 'E5 direct GNU top' ($longTopJson.Schema -eq 1 -and -not (Test-Path -LiteralPath $longTopPath))
     $env:LNCH_NO_DASHBOARD = '1'
     Check 'E5 dashboard opt-out' (-not (Test-LnchDashboardAutoStart))
     Remove-Item Env:LNCH_NO_DASHBOARD -ErrorAction SilentlyContinue

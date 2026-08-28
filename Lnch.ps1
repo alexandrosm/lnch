@@ -557,6 +557,85 @@ function global:Select-LnchAgent {
     $null
 }
 
+$script:LnchCliSwitchOptions = @{
+    '-yolo' = 'Yolo'; '--yolo' = 'Yolo'
+    '-here' = 'Here'; '--here' = 'Here'
+    '-no-dashboard' = 'NoDashboard'; '--no-dashboard' = 'NoDashboard'
+    '-top' = 'Top'; '--top' = 'Top'
+    '-doctor' = 'Doctor'; '--doctor' = 'Doctor'
+    '-discover' = 'Discover'; '--discover' = 'Discover'
+    '-sessions' = 'Sessions'; '--sessions' = 'Sessions'
+    '-include-children' = 'IncludeChildren'; '--include-children' = 'IncludeChildren'
+    '-tabs' = 'Tabs'; '--tabs' = 'Tabs'
+    '-prune' = 'Prune'; '--prune' = 'Prune'
+    '-json' = 'Json'; '--json' = 'Json'
+    '-version' = 'Version'; '--version' = 'Version'; '-v' = 'Version'
+}
+
+$script:LnchCliValueOptions = @{
+    '-transcript' = @{ Parameter = 'Transcript'; Error = '--transcript requires a session reference' }
+    '--transcript' = @{ Parameter = 'Transcript'; Error = '--transcript requires a session reference' }
+    '-terminal' = @{ Parameter = 'TerminalMode'; Error = '--terminal requires a mode' }
+    '--terminal' = @{ Parameter = 'TerminalMode'; Error = '--terminal requires a mode' }
+    '-backend' = @{ Parameter = 'TerminalBackend'; Error = '--terminal-backend requires auto, wt, agentterm, or inline' }
+    '--backend' = @{ Parameter = 'TerminalBackend'; Error = '--terminal-backend requires auto, wt, agentterm, or inline' }
+    '-terminal-backend' = @{ Parameter = 'TerminalBackend'; Error = '--terminal-backend requires auto, wt, agentterm, or inline' }
+    '--terminal-backend' = @{ Parameter = 'TerminalBackend'; Error = '--terminal-backend requires auto, wt, agentterm, or inline' }
+    '-window' = @{ Parameter = 'TerminalWindow'; Error = '--window requires a target' }
+    '--window' = @{ Parameter = 'TerminalWindow'; Error = '--window requires a target' }
+    '-profile' = @{ Parameter = 'TerminalProfile'; Error = '--profile requires a name or GUID' }
+    '--profile' = @{ Parameter = 'TerminalProfile'; Error = '--profile requires a name or GUID' }
+    '-title-template' = @{ Parameter = 'TerminalTitle'; Error = '--title-template requires a value' }
+    '--title-template' = @{ Parameter = 'TerminalTitle'; Error = '--title-template requires a value' }
+    '-tab-color' = @{ Parameter = 'TabColor'; Error = '--tab-color requires #RGB or #RRGGBB' }
+    '--tab-color' = @{ Parameter = 'TabColor'; Error = '--tab-color requires #RGB or #RRGGBB' }
+    '-color-scheme' = @{ Parameter = 'ColorScheme'; Error = '--color-scheme requires a name' }
+    '--color-scheme' = @{ Parameter = 'ColorScheme'; Error = '--color-scheme requires a name' }
+    '-agentterm-path' = @{ Parameter = 'AgentTermPath'; Error = '--agentterm-path requires a value' }
+    '--agentterm-path' = @{ Parameter = 'AgentTermPath'; Error = '--agentterm-path requires a value' }
+    '-agentterm-home' = @{ Parameter = 'AgentTermHome'; Error = '--agentterm-home requires a value' }
+    '--agentterm-home' = @{ Parameter = 'AgentTermHome'; Error = '--agentterm-home requires a value' }
+    '-agentterm-port' = @{ Parameter = 'AgentTermPort'; Error = '--agentterm-port requires a port'; Integer = $true }
+    '--agentterm-port' = @{ Parameter = 'AgentTermPort'; Error = '--agentterm-port requires a port'; Integer = $true }
+    '-readiness-timeout' = @{ Parameter = 'ReadinessTimeoutMs'; Error = '--readiness-timeout requires milliseconds'; Integer = $true }
+    '--readiness-timeout' = @{ Parameter = 'ReadinessTimeoutMs'; Error = '--readiness-timeout requires milliseconds'; Integer = $true }
+    '-default-agent' = @{ Parameter = 'SetDefaultAgent'; Error = '--default-agent requires a value (<name>|none)' }
+    '--default-agent' = @{ Parameter = 'SetDefaultAgent'; Error = '--default-agent requires a value (<name>|none)' }
+    '-agent' = @{ Parameter = 'Agent'; Error = '--agent requires a value' }
+    '--agent' = @{ Parameter = 'Agent'; Error = '--agent requires a value' }
+}
+
+function global:ConvertFrom-LnchCliArguments {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Arguments = @())
+
+    $call = @{}
+    $name = $null
+    $prompt = New-Object 'System.Collections.Generic.List[string]'
+    for ($index = 0; $index -lt $Arguments.Count; $index++) {
+        $token = [string]$Arguments[$index]
+        if ($script:LnchCliSwitchOptions.ContainsKey($token)) {
+            $call[$script:LnchCliSwitchOptions[$token]] = $true
+            continue
+        }
+        if ($script:LnchCliValueOptions.ContainsKey($token)) {
+            $option = $script:LnchCliValueOptions[$token]
+            $index++
+            if ($index -ge $Arguments.Count) { throw $option.Error }
+            $value = [string]$Arguments[$index]
+            if ($option.Integer -and $value -notmatch '^\d+$') { throw $option.Error }
+            $call[$option.Parameter] = if ($option.Integer) { [int]$value } else { $value }
+            continue
+        }
+        if ($null -eq $name) { $name = $token }
+        else { $prompt.Add($token) }
+    }
+
+    if ($null -ne $name) { $call.Name = $name }
+    if ($prompt.Count -gt 0) { $call.Prompt = [string[]]$prompt.ToArray() }
+    $call
+}
+
 function global:lnch {
     [CmdletBinding()]
     param(
@@ -596,6 +675,34 @@ function global:lnch {
         [switch]$Json,
         [switch]$Version
     )
+    # PowerShell 5.1 treats GNU-style options as positional strings. Normalize
+    # recognized long options through the same parser used by cmd/bash/zsh.
+    $rawCliArguments = New-Object 'System.Collections.Generic.List[string]'
+    if ($PSBoundParameters.ContainsKey('Name')) { $rawCliArguments.Add([string]$Name) }
+    if ($PSBoundParameters.ContainsKey('Prompt')) {
+        foreach ($argument in $Prompt) { $rawCliArguments.Add([string]$argument) }
+    }
+    $containsLongOption = $false
+    foreach ($argument in $rawCliArguments) {
+        if ($argument.StartsWith('--') -and (
+            $script:LnchCliSwitchOptions.ContainsKey($argument) -or
+            $script:LnchCliValueOptions.ContainsKey($argument)
+        )) {
+            $containsLongOption = $true
+            break
+        }
+    }
+    if ($containsLongOption) {
+        $normalizedCall = ConvertFrom-LnchCliArguments -Arguments $rawCliArguments.ToArray()
+        foreach ($parameterName in @($PSBoundParameters.Keys)) {
+            if ($parameterName -notin @('Name', 'Prompt')) {
+                $normalizedCall[$parameterName] = $PSBoundParameters[$parameterName]
+            }
+        }
+        lnch @normalizedCall
+        return
+    }
+
 
     # --- management modes ------------------------------------------------
     if ($Version) {

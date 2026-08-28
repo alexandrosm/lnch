@@ -6,6 +6,7 @@
 - Managed interactive launches now leave the invoking tab in the dashboard after Windows Terminal handoff; `--no-dashboard` and `LNCH_NO_DASHBOARD=1` preserve one-shot behavior. Model pins persist through launch receipts and restored tabs, while unavailable cost remains explicitly unknown.
 - Made Windows Terminal the default backend. `auto` and explicit `agentterm` remain available for opt-in capability selection.
 - Deferred recursive project disk scans until an explicit dashboard refresh, preventing large project roots from blocking the first frame.
+- Fixed direct PowerShell GNU-style options such as `lnch --top`; they now share the cmd/bash/zsh parser instead of becoming project names.
 
 ## v1.5.0
 
