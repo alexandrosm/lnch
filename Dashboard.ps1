@@ -60,11 +60,18 @@ function script:Get-LnchDashboardProcessTreeIds {
 }
 
 function script:Get-LnchCachedProjectDiskUsage {
-    param([Parameter(Mandatory)][string]$Directory, [int]$MaxAgeSeconds = 60)
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [int]$MaxAgeSeconds = 60,
+        [switch]$Refresh
+    )
     $key = Get-LnchDashboardPathKey $Directory
     $now = [datetime]::UtcNow
     $cached = $script:LnchDashboardDiskCache[$key]
-    if ($cached -and ($now - $cached.MeasuredAt).TotalSeconds -lt $MaxAgeSeconds) { return [long]$cached.Bytes }
+    if ($cached -and -not $Refresh -and ($now - $cached.MeasuredAt).TotalSeconds -lt $MaxAgeSeconds) {
+        return [long]$cached.Bytes
+    }
+    if (-not $Refresh) { return $null }
     $bytes = [long](Get-LnchProjectDiskUsage -Dir $Directory)
     $script:LnchDashboardDiskCache[$key] = [pscustomobject]@{ MeasuredAt = $now; Bytes = $bytes }
     $bytes
@@ -154,8 +161,7 @@ function global:Get-LnchProjectDashboardSnapshot {
             $script:LnchDashboardCpuSamples.Remove($directoryKey)
         }
 
-        $diskAge = if ($RefreshDisk) { 0 } else { 60 }
-        $diskBytes = Get-LnchCachedProjectDiskUsage -Directory $directory.FullName -MaxAgeSeconds $diskAge
+        $diskBytes = Get-LnchCachedProjectDiskUsage -Directory $directory.FullName -Refresh:$RefreshDisk
         $state = Get-LnchDashboardProjectState -Sessions $projectSessions
         $modelSession = @($activeSessions + $projectSessions | Where-Object { $_ -and $_.PSObject.Properties['Model'] -and $_.Model } | Select-Object -First 1)
         $model = if ($modelSession.Count -gt 0) { [string]$modelSession[0].Model } else { $null }
@@ -189,6 +195,7 @@ function global:Get-LnchProjectDashboardSnapshot {
     }
 
     $projectArray = @($projects.ToArray())
+    $measuredDisk = @($projectArray | Where-Object { $null -ne $_.DiskBytes })
     [pscustomobject][ordered]@{
         Schema      = 1
         GeneratedAt = $now.ToString('o')
@@ -200,7 +207,7 @@ function global:Get-LnchProjectDashboardSnapshot {
             ProcessCount   = [int](($projectArray | Measure-Object -Property ProcessCount -Sum).Sum)
             CpuPercent     = [Math]::Round([double](($projectArray | Measure-Object -Property CpuPercent -Sum).Sum), 1)
             WorkingSetBytes = [long](($projectArray | Measure-Object -Property WorkingSetBytes -Sum).Sum)
-            DiskBytes      = [long](($projectArray | Measure-Object -Property DiskBytes -Sum).Sum)
+            DiskBytes      = if ($measuredDisk.Count -gt 0) { [long](($measuredDisk | Measure-Object -Property DiskBytes -Sum).Sum) } else { $null }
             Cost           = $null
             CostKind       = 'unknown'
         }
@@ -386,7 +393,7 @@ function script:Get-LnchDashboardFrame {
         $lines.Add("$blue$detailBottom$reset") | Out-Null
     }
     $generated = try { ([datetime]$Snapshot.GeneratedAt).ToLocalTime().ToString('HH:mm:ss') } catch { '--:--:--' }
-    $footer = " UP/DOWN select   R refresh + disk   Q quit                                  updated $generated "
+    $footer = " UP/DOWN select   R measure disk + refresh   Q quit                           updated $generated "
     $lines.Add("$cyan$bold$(Limit-LnchDashboardText $footer $width)$reset") | Out-Null
     $lines -join [Environment]::NewLine
 }

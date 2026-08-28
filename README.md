@@ -100,14 +100,14 @@ New projects choose their agent in this order: explicit `-Agent` → persisted d
 
 `lnch --top` opens the full-screen dashboard directly. Managed launches enter it automatically when the invoking host is interactive; use `--no-dashboard` or `LNCH_NO_DASHBOARD=1` to opt out. Inline `--here` sessions keep the tab for the agent and therefore do not open the dashboard. `lnch --top --json` emits the same normalized snapshot without entering the TUI.
 
-The dashboard groups each active receipt-rooted process tree by project and refreshes CPU, working/private memory, process count, cumulative I/O, lifecycle state, pinned launch model, and project disk usage. CPU is normalized across logical processors. Disk usage is cached for 60 seconds and `R` forces a fresh scan. Receipt-backed states are `starting`, `running`, `completed`, `failed`, and `stale`; projects without a receipt are `idle`.
+The dashboard groups each active receipt-rooted process tree by project and refreshes CPU, working/private memory, process count, cumulative I/O, lifecycle state, pinned launch model, and project disk usage. CPU is normalized across logical processors. The first frame defers recursive disk scans so large project roots appear immediately; unknown values render as `--`. Press `R` to measure disk usage, cache it for 60 seconds, and refresh the frame. Receipt-backed states are `starting`, `running`, `completed`, `failed`, and `stale`; projects without a receipt are `idle`.
 
 Model is shown only when it was explicitly pinned with `:model`; otherwise it remains `unknown`. Cost remains `unknown` until an agent/provider adapter can supply reported usage or an attributable token estimate—lnch never renders a fabricated `$0.00`.
 
 | Key | Action |
 |---|---|
 | `Up` / `Down` | Select a project and update its process/I/O detail panel |
-| `R` | Refresh immediately and invalidate the disk-usage cache |
+| `R` | Measure project disk usage and refresh immediately |
 | `Q` / `Esc` | Leave the dashboard and return to the invoking shell |
 
 By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly. The resolved root is captured before any terminal handoff and reused inside the child process; changing the terminal's working directory never creates a recursive `<project>\projects\<project>` path.

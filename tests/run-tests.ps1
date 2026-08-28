@@ -127,7 +127,10 @@ try {
     $dashboardTerminal = Get-LnchTerminalConfig -Backend wt -ReadinessTimeoutMs 0 -Agent omp
     $dashboardContext = New-LnchLaunchContext -Name 'usage-fixture' -Directory $usageRoot -Root $Projects -Agent omp -Prompt @() -Verbs @([pscustomobject]@{ Name = 'model'; Value = 'gpt-5.6-sol' }) -Fresh $false -Terminal $dashboardTerminal
     $null = Write-LnchTerminalReceipt -Context $dashboardContext -State agent-running
-    $dashboardSnapshot = Get-LnchProjectDashboardSnapshot -Root $Projects
+    $dashboardPreview = Get-LnchProjectDashboardSnapshot -Root $Projects
+    $previewTelemetry = @($dashboardPreview.Projects | Where-Object Name -eq 'usage-fixture')[0]
+    Check 'E5 disk deferred' ($null -eq $previewTelemetry.DiskBytes -and $null -eq $dashboardPreview.Summary.DiskBytes)
+    $dashboardSnapshot = Get-LnchProjectDashboardSnapshot -Root $Projects -RefreshDisk
     $usageTelemetry = @($dashboardSnapshot.Projects | Where-Object Name -eq 'usage-fixture')[0]
     Check 'E5 schema' ($dashboardSnapshot.Schema -eq 1 -and $dashboardSnapshot.Root -eq [System.IO.Path]::GetFullPath($Projects))
     Check 'E5 active process tree' ($usageTelemetry.State -eq 'running' -and $usageTelemetry.ActiveSessions -eq 1 -and $usageTelemetry.ProcessCount -ge 1 -and $usageTelemetry.WorkingSetBytes -gt 0)
