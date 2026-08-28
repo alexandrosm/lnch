@@ -108,20 +108,50 @@ exit /b 0
     Check 'readiness timeout detected' ($timeoutResult.Accepted -and -not $timeoutResult.Ready -and $timeoutResult.Error -eq 'child readiness timeout')
     Remove-Item -LiteralPath (Get-LnchLaunchContextPath $timeoutContext.LaunchId) -Force
 
-    $receiptContext = New-LnchLaunchContext -Name receipt -Directory $projectA -Root $testRoot -Agent omp -Prompt @() -Verbs @() -Fresh $false -Terminal $defaults
-    $null = Write-LnchTerminalReceipt -Context $receiptContext -State child-started
+    $receiptContext = New-LnchLaunchContext -Name receipt -Directory $projectA -Root $testRoot -Agent omp -Prompt @('do', 'not', 'replay') -Verbs @([pscustomobject]@{ Name = 'yolo' }) -Fresh $true -Terminal $defaults
+    $initialContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
+    Check 'initial launch context preserved' ($initialContext.Fresh -and (@($initialContext.Prompt) -join ' ') -eq 'do not replay' -and @($initialContext.Verbs).Count -eq 1)
+    Check 'initial launch context consumed atomically' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $receiptContext.LaunchId)))
+    $null = Write-LnchTerminalReceipt -Context $initialContext -State child-started
+    $duplicateContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
+    Check 'active restored duplicate detected' ($duplicateContext.Restored -and $duplicateContext.AlreadyActive)
+    Check 'restored duplicate strips one-shot state' (-not $duplicateContext.Fresh -and @($duplicateContext.Prompt).Count -eq 0 -and @($duplicateContext.Verbs).Count -eq 0)
     $live = Get-LnchTerminalSessions | Where-Object LaunchId -eq $receiptContext.LaunchId
     Check 'live receipt visible' ($live.Active -and $live.State -eq 'child-started')
-    $null = Write-LnchTerminalReceipt -Context $receiptContext -State agent-exited -ExitCode 0
+    $null = Write-LnchTerminalReceipt -Context $initialContext -State agent-exited -ExitCode 0
+    $restoredContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
+    Check 'exited launch restores as resume' ($restoredContext.Restored -and -not $restoredContext.AlreadyActive -and -not $restoredContext.Fresh)
+    Check 'restored context retains project identity' ($restoredContext.Name -eq 'receipt' -and $restoredContext.Directory -eq $projectA -and $restoredContext.Root -eq $testRoot -and $restoredContext.Agent -eq 'omp')
+    $restoring = Get-LnchTerminalSessions | Where-Object LaunchId -eq $receiptContext.LaunchId
+    Check 'restore claim visible and active' ($restoring.Active -and $restoring.State -eq 'restoring')
+    $null = Write-LnchTerminalReceipt -Context $restoredContext -State agent-exited -ExitCode 0
     $exited = Get-LnchTerminalSessions | Where-Object LaunchId -eq $receiptContext.LaunchId
     Check 'exit receipt visible' (-not $exited.Active -and $exited.State -eq 'agent-exited' -and $exited.ExitCode -eq 0)
+    $restoreWorker = {
+        param($SourceRoot, $RuntimeRoot, $ConfigRoot, $Id)
+        $env:LNCH_RUNTIME_DIR = $RuntimeRoot
+        $env:LNCH_CONFIG_DIR = $ConfigRoot
+        . (Join-Path $SourceRoot 'Lnch.ps1')
+        $claimed = Receive-LnchLaunchContext -LaunchId $Id
+        Start-Sleep -Milliseconds 500
+        [pscustomobject]@{ AlreadyActive = [bool]$claimed.AlreadyActive }
+    }
+    $restoreJobs = @(
+        Start-Job -ScriptBlock $restoreWorker -ArgumentList $LnchRoot, $runtimeDir, $configDir, $receiptContext.LaunchId
+        Start-Job -ScriptBlock $restoreWorker -ArgumentList $LnchRoot, $runtimeDir, $configDir, $receiptContext.LaunchId
+    )
+    $null = $restoreJobs | Wait-Job
+    $restoreClaims = @($restoreJobs | Receive-Job | Where-Object { $null -ne $_.PSObject.Properties['AlreadyActive'] })
+    $restoreJobs | Remove-Job -Force
+    Check 'concurrent restore has one claimant' (@($restoreClaims | Where-Object { -not $_.AlreadyActive }).Count -eq 1)
+    Check 'concurrent restore suppresses one duplicate' (@($restoreClaims | Where-Object AlreadyActive).Count -eq 1)
+    $null = Write-LnchTerminalReceipt -Context $restoredContext -State agent-exited -ExitCode 0
     $receiptPath = Join-Path (Join-Path $runtimeDir 'sessions') "$($receiptContext.LaunchId).json"
     $receiptRecord = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
     $receiptRecord.UpdatedAt = (Get-Date).ToUniversalTime().AddDays(-8).ToString('o')
     $receiptRecord | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8
     $null = @(Get-LnchTerminalSessions -Prune)
     Check 'old exit receipt pruned' (-not (Test-Path -LiteralPath $receiptPath))
-    Remove-Item -LiteralPath (Get-LnchLaunchContextPath $receiptContext.LaunchId) -Force
 
     Set-LnchDefaultAgent claude | Out-Null
     $preserved = Get-LnchUserConfig

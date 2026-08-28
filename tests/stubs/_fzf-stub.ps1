@@ -1,4 +1,7 @@
 $l = @($input | Where-Object { $_ })
+if ($env:LNCH_TEST_FZF_LOG) {
+    @($l) | Set-Content -LiteralPath $env:LNCH_TEST_FZF_LOG -Encoding utf8
+}
 if ($env:LNCH_TEST_FZF_MULTI) {
     @($l | Where-Object { $_ -like 'theta*' -or $_ -like 'alpha*' }) | Write-Output
     return

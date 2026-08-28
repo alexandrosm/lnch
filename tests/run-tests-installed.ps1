@@ -174,6 +174,11 @@ try {
     Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue
 }
 lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
+$sessions = Get-Content -LiteralPath $SessionsFile -Raw | ConvertFrom-Json
+$freshSession = @($sessions.Sessions | Where-Object Project -eq 'fresh')[0]
+if (-not $freshSession) { throw 'fresh launch receipt was not recorded before restoration' }
+& (Join-Path $InstallDir 'Lnch-InTab.ps1') -LaunchId $freshSession.LaunchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
 '@ | Set-Content -LiteralPath $runner -Encoding utf8
 
     [Environment]::SetEnvironmentVariable('PATH', "$bin;$($before['PATH'])", 'Process')
@@ -208,10 +213,12 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
         $encoded = $_.Substring(7)
         if ($encoded) { ,@($encoded -split ',' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }) } else { ,@() }
     })
-    if ($agentCwds -notcontains $existingProject) { throw "existing child used the wrong cwd: $($agentCwds -join '; ')" }
-    if ($agentCwds -notcontains $freshProject) { throw "fresh child used the wrong cwd: $($agentCwds -join '; ')" }
-    if (-not @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq '-c' })) { throw 'existing project did not resume' }
-    if (-not @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq 'hello installed' })) { throw 'fresh prompt did not reach the agent' }
+    if (@($agentCwds | Where-Object { $_ -eq $existingProject }).Count -ne 1) { throw "existing child used the wrong cwd: $($agentCwds -join '; ')" }
+    if (@($agentCwds | Where-Object { $_ -eq $freshProject }).Count -ne 2) { throw "fresh child and restored tab used the wrong cwd: $($agentCwds -join '; ')" }
+    $resumeInvocations = @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq '-c' })
+    $freshInvocations = @($agentArguments | Where-Object { $_.Count -eq 1 -and $_[0] -eq 'hello installed' })
+    if ($resumeInvocations.Count -ne 2) { throw "existing and restored projects did not resume exactly once each" }
+    if ($freshInvocations.Count -ne 1) { throw 'fresh prompt was replayed during terminal restoration' }
     if (Test-Path -LiteralPath (Join-Path $existingProject 'projects\existing')) { throw 'recursive project path was created' }
     if (-not (Test-Path -LiteralPath (Join-Path $freshProject '.git') -PathType Container)) { throw 'fresh explicit-root project was not initialized' }
     if (-not (Test-Path -LiteralPath (Join-Path $freshProject 'AGENTS.md') -PathType Leaf)) { throw 'fresh project scaffold was not installed' }
@@ -220,7 +227,9 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
 
     if (-not (Test-Path -LiteralPath (Join-Path $configDir 'update-cache.json') -PathType Leaf)) { throw 'first-run update cache was not written' }
     $joinedOutput = $output -join ' '
-    if ($joinedOutput -notmatch [regex]::Escape('-> existing opened in wt') -or $joinedOutput -notmatch [regex]::Escape('-> fresh opened in wt')) {
+    $existingOpened = $joinedOutput -match '-> existing opened in (?:wt|Windows Terminal)'
+    $freshOpened = $joinedOutput -match '-> fresh opened in (?:wt|Windows Terminal)'
+    if (-not $existingOpened -or -not $freshOpened) {
         throw "parent launches did not complete:`n$($output -join [Environment]::NewLine)"
     }
 
@@ -253,6 +262,7 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     Write-Host 'PASS installed terminal presentation policy'
     Write-Host 'PASS installed public terminal session ledger'
     Write-Host 'PASS installed existing resume and fresh prompt'
+    Write-Host 'PASS installed Windows Terminal restoration resumes without replay'
     Write-Host 'RESULT: INSTALLED JOURNEY PASS'
 } finally {
     foreach ($name in $envNames) { [Environment]::SetEnvironmentVariable($name, $before[$name], 'Process') }

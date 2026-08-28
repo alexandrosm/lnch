@@ -107,6 +107,22 @@ try {
     Check 'E3 range' (($indexes -join ',') -eq '1,3,4')
     Check 'E3 all' ((@(ConvertFrom-LnchProjectSelection -Selection 'all' -Count 4) -join ',') -eq '1,2,3,4')
 
+    Write-Host '=== E4: project disk usage ==='
+    $usageRoot = Join-Path $Projects 'usage-fixture'
+    $usageNested = Join-Path $usageRoot 'nested'
+    $usageEmpty = Join-Path $usageRoot 'empty'
+    New-Item -ItemType Directory -Path $usageNested, $usageEmpty -Force | Out-Null
+    [System.IO.File]::WriteAllBytes((Join-Path $usageRoot 'root.bin'), (New-Object byte[] 2048))
+    [System.IO.File]::WriteAllBytes((Join-Path $usageNested 'child.bin'), (New-Object byte[] 1024))
+    Check 'E4 recursive bytes' ((Get-LnchProjectDiskUsage -Dir $usageRoot) -eq 3072)
+    Check 'E4 empty directory' ((Get-LnchProjectDiskUsage -Dir $usageEmpty) -eq 0)
+    Check 'E4 human size' ((script:Format-LnchSize 3072) -eq '3 KB')
+    $env:LNCH_TEST_FZF_LOG = Join-Path $TestRoot 'fzf-project-lines.txt'
+    $null = @(Select-LnchProjectSet -Root $Projects)
+    Remove-Item Env:LNCH_TEST_FZF_LOG -ErrorAction SilentlyContinue
+    $pickerLines = Get-Content -LiteralPath (Join-Path $TestRoot 'fzf-project-lines.txt') -Raw
+    Check 'E4 picker size column' ($pickerLines -match '(?m)^usage-fixture\s+\|.*\|\s+3 KB\s+\|')
+
     Write-Host '=== F: versioned new-tab launch envelope ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $out = & $__lnchFn epsilon hi there
@@ -129,6 +145,20 @@ try {
     $j = $out -join ' '
     Check 'F launcher fresh prompt' (($j -match '\[omp-stub\] args="hi there"') -and -not ($j -match 'args=-c'))
     Check 'F context consumed' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $launchId)))
+    $previousLocation = Get-Location
+    try {
+        Set-Location -LiteralPath (Join-Path $Projects 'epsilon')
+        $restoredOut = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+    } finally { Set-Location -LiteralPath $previousLocation }
+    $restoredText = $restoredOut -join ' '
+    Check 'F restored tab resumes' ($restoredText -match '\[omp-stub\] args=-c\b')
+    Check 'F restored tab does not replay prompt' ($restoredText -notmatch 'hi there')
+    $activeContext = Receive-LnchLaunchContext -LaunchId $launchId
+    $null = Write-LnchTerminalReceipt -Context $activeContext -State child-started
+    $duplicateOut = @(& $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR *>&1)
+    $duplicateText = $duplicateOut -join ' '
+    Check 'F active duplicate suppressed' ($duplicateText -match 'already active' -and $duplicateText -notmatch '\[omp-stub\]')
+    $null = Write-LnchTerminalReceipt -Context $activeContext -State agent-exited -ExitCode 0
 
     Write-Host '=== F2: existing project envelope resumes ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue

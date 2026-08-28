@@ -33,6 +33,65 @@ function script:Get-LnchReceiptPath {
     Join-Path (Get-LnchReceiptDirectory) "$($parsedId.ToString('D')).json"
 }
 
+function script:Test-LnchReceiptProcessActive {
+    param([Parameter(Mandatory)]$Receipt)
+    if ($Receipt.State -notin @('restoring', 'child-started', 'agent-running') -or -not $Receipt.Pid) { return $false }
+    try {
+        $process = Get-Process -Id ([int]$Receipt.Pid) -ErrorAction Stop
+        $actualStart = $process.StartTime.ToUniversalTime()
+        if ($Receipt.ProcessStartedAt) {
+            $expectedStart = ([datetime]$Receipt.ProcessStartedAt).ToUniversalTime()
+            return [math]::Abs(($actualStart - $expectedStart).TotalSeconds) -lt 2
+        }
+        if ($Receipt.UpdatedAt) {
+            $updated = ([datetime]$Receipt.UpdatedAt).ToUniversalTime()
+            return $actualStart -le $updated.AddMinutes(1)
+        }
+        $true
+    } catch {
+        $false
+    }
+}
+
+function script:ConvertTo-LnchRestoredContext {
+    param([Parameter(Mandatory)]$Receipt, [Parameter(Mandatory)][string]$LaunchId)
+    if ($Receipt.Schema -ne 1 -or $Receipt.LaunchId -ne $LaunchId) { throw "invalid launch receipt: $LaunchId" }
+    foreach ($required in @('Project', 'Directory', 'Root', 'Agent')) {
+        if ([string]::IsNullOrWhiteSpace([string]$Receipt.$required)) { throw "launch receipt missing $required" }
+    }
+    [pscustomobject][ordered]@{
+        Schema        = 1
+        LaunchId      = $LaunchId
+        CreatedAt     = $(if ($Receipt.StartedAt) { [string]$Receipt.StartedAt } else { (Get-Date).ToUniversalTime().ToString('o') })
+        Name          = [string]$Receipt.Project
+        Directory     = [System.IO.Path]::GetFullPath([string]$Receipt.Directory)
+        Root          = [System.IO.Path]::GetFullPath([string]$Receipt.Root)
+        Agent         = [string]$Receipt.Agent
+        Prompt        = @()
+        Verbs         = @()
+        Fresh         = $false
+        Restored      = $true
+        AlreadyActive = Test-LnchReceiptProcessActive -Receipt $Receipt
+        RuntimeRoot   = Get-LnchRuntimeRoot
+        Terminal      = [pscustomobject][ordered]@{
+            Backend            = $(if ($Receipt.Backend) { [string]$Receipt.Backend } else { 'wt' })
+            Mode               = $(if ($Receipt.Mode) { [string]$Receipt.Mode } else { 'tab' })
+            Window             = $(if ($Receipt.Window) { [string]$Receipt.Window } else { 'last' })
+            Profile            = $null
+            Title              = [string]$Receipt.Project
+            TabColor           = $null
+            ColorScheme        = $null
+            ReadinessTimeoutMs = 0
+            AgentTermPath      = $null
+            AgentTermHome      = $null
+            AgentTermPort      = $null
+            Identity           = $Receipt.TerminalId
+            SessionId          = $Receipt.TerminalSessionId
+            ProcessId          = $Receipt.TerminalProcessId
+        }
+    }
+}
+
 function script:Write-LnchAtomicJson {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Value, [int]$Depth = 10)
     $directory = Split-Path -Parent $Path
@@ -190,8 +249,37 @@ function global:Receive-LnchLaunchContext {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LaunchId)
     $path = Get-LnchLaunchContextPath $LaunchId
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "launch context not found: $LaunchId" }
-    try { $context = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    $claimedPath = "$path.$PID.$([guid]::NewGuid().ToString('N')).claim"
+    $context = $null
+    $launchFileObserved = Test-Path -LiteralPath $path -PathType Leaf
+    if ($launchFileObserved) {
+        try { Move-Item -LiteralPath $path -Destination $claimedPath -ErrorAction Stop } catch { }
+        if (Test-Path -LiteralPath $claimedPath -PathType Leaf) {
+            try { $context = Get-Content -LiteralPath $claimedPath -Raw | ConvertFrom-Json } finally { Remove-Item -LiteralPath $claimedPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    if ($null -eq $context) {
+        $receiptPath = Get-LnchReceiptPath $LaunchId
+        if ($launchFileObserved) {
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($watch.ElapsedMilliseconds -lt 2000 -and -not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+                Start-Sleep -Milliseconds 50
+            }
+        }
+        $restoreMutex = New-Object System.Threading.Mutex($false, "Local\lnch-restore-$LaunchId")
+        $restoreAcquired = $false
+        try {
+            try { $restoreAcquired = $restoreMutex.WaitOne(5000) } catch [System.Threading.AbandonedMutexException] { $restoreAcquired = $true }
+            if (-not $restoreAcquired) { throw "launch restore claim timed out: $LaunchId" }
+            if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw "launch context not found: $LaunchId" }
+            try { $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json } catch { throw "invalid launch receipt: $LaunchId" }
+            $context = ConvertTo-LnchRestoredContext -Receipt $receipt -LaunchId $LaunchId
+            if (-not $context.AlreadyActive) { Write-LnchTerminalReceipt -Context $context -State restoring | Out-Null }
+        } finally {
+            if ($restoreAcquired) { $restoreMutex.ReleaseMutex() }
+            $restoreMutex.Dispose()
+        }
+    }
     if ($context.Schema -ne 1 -or $context.LaunchId -ne $LaunchId) { throw "invalid launch context: $LaunchId" }
     foreach ($required in @('Name', 'Directory', 'Root', 'Agent')) {
         if ([string]::IsNullOrWhiteSpace([string]$context.$required)) { throw "launch context missing $required" }
@@ -202,11 +290,13 @@ function global:Receive-LnchLaunchContext {
 function global:Write-LnchTerminalReceipt {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Context, [Parameter(Mandatory)][string]$State, [Nullable[int]]$ExitCode, [string]$ErrorMessage)
+    $processStartedAt = try { (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o') } catch { $null }
     $receipt = [pscustomobject][ordered]@{
         Schema       = 1
         LaunchId     = $Context.LaunchId
         State        = $State
         Pid          = $PID
+        ProcessStartedAt = $processStartedAt
         WtSession    = $env:WT_SESSION
         Project      = $Context.Name
         Directory    = $Context.Directory
@@ -326,10 +416,9 @@ function global:Get-LnchTerminalSessions {
     $now = (Get-Date).ToUniversalTime()
     foreach ($file in @(Get-ChildItem -LiteralPath (Get-LnchReceiptDirectory) -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
         try { $receipt = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json } catch { continue }
-        $processAlive = $false
-        if ($receipt.Pid) { try { $processAlive = $null -ne (Get-Process -Id ([int]$receipt.Pid) -ErrorAction Stop) } catch { } }
-        $active = $receipt.State -in @('child-started', 'agent-running') -and $processAlive
-        $stale = $receipt.State -in @('child-started', 'agent-running') -and -not $processAlive
+        $processAlive = Test-LnchReceiptProcessActive -Receipt $receipt
+        $active = $receipt.State -in @('restoring', 'child-started', 'agent-running') -and $processAlive
+        $stale = $receipt.State -in @('restoring', 'child-started', 'agent-running') -and -not $processAlive
         $updated = try { ([datetime]$receipt.UpdatedAt).ToUniversalTime() } catch { $file.LastWriteTimeUtc }
         $oldTerminalState = $receipt.State -in @('agent-exited', 'failed') -and ($now - $updated).TotalDays -gt 7
         if ($Prune -and (($stale -and ($now - $updated).TotalHours -gt 1) -or $oldTerminalState)) {

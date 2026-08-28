@@ -1,7 +1,7 @@
 # lnch: the `lnch` command for PowerShell.
 #
 #   lnch                      pick an existing project (fzf if installed, else numbered list;
-#                              shows saved intent + last-active time)
+#                              shows saved intent + disk usage + last-active time)
 #   lnch <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
 #                              extra words become the agent's initial prompt AND are saved
 #                              as the project's intent
@@ -35,7 +35,7 @@
 #             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.4.0'
+$script:LnchVersion = '1.5.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
@@ -343,6 +343,38 @@ function script:Get-LnchRelativeAge {
     return $When.ToString('yyyy-MM-dd')
 }
 
+function global:Get-LnchProjectDiskUsage {
+    # Recursive byte total for one project directory. Stack-based walk:
+    # skips reparse points (junction/symlink cycles) and tolerates
+    # unreadable files/directories by excluding them.
+    param([Parameter(Mandatory)][string]$Dir)
+    $total = [long]0
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push([System.IO.Path]::GetFullPath($Dir))
+    while ($pending.Count -gt 0) {
+        $current = $pending.Pop()
+        $entries = $null
+        try { $entries = [System.IO.Directory]::EnumerateFileSystemEntries($current) } catch { continue }
+        foreach ($entry in $entries) {
+            try {
+                $attr = [System.IO.File]::GetAttributes($entry)
+                if ($attr -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+                if ($attr -band [System.IO.FileAttributes]::Directory) { $pending.Push($entry) }
+                else { $total += ([System.IO.FileInfo]$entry).Length }
+            } catch { }
+        }
+    }
+    $total
+}
+
+function script:Format-LnchSize {
+    param([long]$Bytes)
+    if ($Bytes -lt 1KB) { return ('{0} B' -f $Bytes) }
+    if ($Bytes -lt 1MB) { return ('{0:N0} KB' -f ($Bytes / 1KB)) }
+    if ($Bytes -lt 1GB) { return ('{0:N1} MB' -f ($Bytes / 1MB)) }
+    return ('{0:N1} GB' -f ($Bytes / 1GB))
+}
+
 function global:Select-LnchProjectConsole {
     param([object[]]$Items, [string]$Root)
     if ($Items.Count -eq 0) { return @() }
@@ -388,14 +420,14 @@ function global:Select-LnchProjectConsole {
                 if ($name.Length -gt 24) { $name = $name.Substring(0, 21) + '...' }
                 $agent = if ($item.Agent) { $item.Agent.ToUpper() } else { 'AUTO' }
                 if ($agent.Length -gt 10) { $agent = $agent.Substring(0, 10) }
-                $intentWidth = [Math]::Max(12, [Math]::Min(46, $windowWidth - 55))
+                $intentWidth = [Math]::Max(12, [Math]::Min(46, $windowWidth - 65))
                 $intent = if ($item.Intent) { $item.Intent } else { 'No saved intent yet' }
                 if ($intent.Length -gt $intentWidth) { $intent = $intent.Substring(0, $intentWidth - 3) + '...' }
-                $row = ' {0} {1} {2,-24} {3,-10} {4,-46} {5,10} ' -f $pointer, $mark, $name, $agent, $intent, $item.Age
+                $row = ' {0} {1} {2,-24} {3,-10} {4,-46} {5,9} {6,10} ' -f $pointer, $mark, $name, $agent, $intent, $item.Size, $item.Age
                 if ($i -eq $cursor) {
                     Write-Host ("{0}{1}{2}{3}" -f $reverse, $cyan, $row, $reset)
                 } else {
-                    Write-Host ("{0}{1}{2} {3}{4}{5} {6,-24} {7}{8,-10}{9} {10}{11,-46}{12} {13}{14,10}{15}" -f $dim, $pointer, $reset, $markColor, $mark, $reset, $name, $yellow, $agent, $reset, $dim, $intent, $reset, $dim, $item.Age, $reset)
+                    Write-Host ("{0}{1}{2} {3}{4}{5} {6,-24} {7}{8,-10}{9} {10}{11,-46}{12} {13}{14,9} {15,10}{16}" -f $dim, $pointer, $reset, $markColor, $mark, $reset, $name, $yellow, $agent, $reset, $dim, $intent, $reset, $dim, $item.Size, $item.Age, $reset)
                 }
             }
 
@@ -456,18 +488,21 @@ function global:Select-LnchProjectSet {
                 if ($meta.updated) { $lastActive = [datetime]$meta.updated }
             } catch { }
         }
+        $sizeBytes = Get-LnchProjectDiskUsage -Dir $d.FullName
         [pscustomobject]@{
-            Name   = $d.Name
-            Intent = $intent
-            Agent  = $agent
-            Age    = script:Get-LnchRelativeAge $lastActive
+            Name      = $d.Name
+            Intent    = $intent
+            Agent     = $agent
+            Age       = script:Get-LnchRelativeAge $lastActive
+            SizeBytes = $sizeBytes
+            Size      = script:Format-LnchSize $sizeBytes
         }
     }
 
-    # line format: "<name>  |  <agent>  |  <intent>  |  <age>"
+    # line format: "<name>  |  <agent>  |  <intent>  |  <size>  |  <age>"
     $lines = @($items | ForEach-Object {
         $shown = if ($_.Intent) { $_.Intent } else { 'No saved intent yet' }
-        '{0}  |  {1}  |  {2}  |  {3}' -f $_.Name, $(if ($_.Agent) { $_.Agent.ToUpper() } else { 'AUTO' }), $shown, $_.Age
+        '{0}  |  {1}  |  {2}  |  {3}  |  {4}' -f $_.Name, $(if ($_.Agent) { $_.Agent.ToUpper() } else { 'AUTO' }), $shown, $_.Size, $_.Age
     })
 
     if (-not $env:LNCH_NO_FZF -and (@(Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue)).Count -gt 0) {
@@ -492,7 +527,7 @@ function global:Select-LnchProjectSet {
     }
 
     for ($i = 0; $i -lt $items.Count; $i++) {
-        ('{0,3}. {1,-24} {2,-10} {3}' -f ($i + 1), $items[$i].Name, $(if ($items[$i].Agent) { $items[$i].Agent } else { 'auto' }), $items[$i].Intent) | Write-Host
+        ('{0,3}. {1,-24} {2,-10} {3,9} {4}' -f ($i + 1), $items[$i].Name, $(if ($items[$i].Agent) { $items[$i].Agent } else { 'auto' }), $items[$i].Size, $items[$i].Intent) | Write-Host
     }
     $answer = Read-Host 'project numbers (1,3-5 or all; blank cancels)'
     $selectedIndexes = @(ConvertFrom-LnchProjectSelection -Selection $answer -Count $items.Count)
@@ -636,6 +671,10 @@ function global:lnch {
         $launcherFresh    = [bool]$launcherContext.Fresh
         $launcherRoot     = [string]$launcherContext.Root
         $launcherVerbs    = @($launcherContext.Verbs)
+        if ($launcherContext.AlreadyActive) {
+            Write-Host "launch $LaunchId is already active for $Name; skipping duplicate restored-tab start"
+            return
+        }
     } else {
         Show-LnchUpdateNotice
     }

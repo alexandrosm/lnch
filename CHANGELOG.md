@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## v1.5.0
 
 - Added AgentTerm as a managed terminal backend with `auto`/`wt`/`agentterm`/`inline` selection, bearer-authenticated tab creation, stable tab/session/process identities, startup command handoff, existing-instance reuse, multi-project tab launches, and backend-aware runtime receipts.
 - Added a real AgentTerm end-to-end smoke covering cwd, prompt, launch-envelope consumption, child readiness/exit, and identity agreement between lnch and AgentTerm.
+- Added live recursive disk-usage totals to the fzf, full-screen, and numbered project pickers, with human-readable sizes and reparse-point-safe traversal.
+- Fixed Windows Terminal session restoration after a tab had consumed its one-shot launch envelope. Restored commands now reconstruct a resume-only context from the durable receipt, never replay the original prompt or capability verbs, and suppress duplicate starts while the original launch process is still active.
 
 ## v1.4.0
 

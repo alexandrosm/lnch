@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/alexandrosm/lnch/main/bootstrap.ps1 | iex
 Pin a release and SHA256-verify it:
 
 ```powershell
-& ~\.lnch\bootstrap.ps1 -Version v1.4.0   # after initial install
+& ~\.lnch\bootstrap.ps1 -Version v1.5.0   # after initial install
 ```
 
 **bash / zsh (Git Bash, WSL)** — one command:
@@ -54,7 +54,7 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 
 | Command | Behavior |
 |---|---|
-| `lnch` | Multi-select existing projects, then launch each in its own tab (fzf if installed, else numbered list) |
+| `lnch` | Multi-select existing projects with live disk usage, then launch each in its own tab (fzf if installed, else numbered list) |
 | `lnch <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
 | `lnch <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
 | `lnch <name> :<verb>` | Capability verbs (see below) — may appear anywhere among the words |
@@ -79,7 +79,9 @@ Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many
 
 ### Project picker UI
 
-Without fzf, bare `lnch` opens a full-screen multi-select TUI with project name, owning agent, saved intent, relative activity, selected count, and a scrollable viewport:
+Without fzf, bare `lnch` opens a full-screen multi-select TUI with project name, owning agent, saved intent, live disk usage, relative activity, selected count, and a scrollable viewport:
+
+Disk usage is the recursive total of readable regular-file lengths; reparse points are skipped to avoid cycles.
 
 | Key | Action |
 |---|---|
@@ -97,6 +99,8 @@ By default, the project root is the `projects` subfolder of your **current worki
 ## Terminal backends and lifecycle
 
 `lnch` treats terminal hosts as replaceable transport adapters. Parent and child exchange a schema-versioned JSON envelope under `%LOCALAPPDATA%\lnch\runtime\launches` (override with `LNCH_RUNTIME_DIR`); the child consumes that file, verifies the exact project directory, and publishes lifecycle receipts under `runtime\sessions`. Prompt arrays, capability verbs, resolved root, selected agent, launch policy, and a unique launch ID therefore survive spaces, Unicode, and concurrent launches without process-global `LNCH_NAME`/`LNCH_PROMPT` variables.
+
+Windows Terminal may replay a tab's original command after an application or machine restart, long after the one-shot launch envelope was consumed. In that path `lnch` rebuilds a resume-only context from the durable lifecycle receipt: project/root/agent identity is preserved, while the original prompt, fresh-project state, and capability verbs are never replayed. If that launch process is still active, the duplicate restored command exits cleanly instead of starting a second agent.
 
 Per-launch PowerShell parameters and their bash/cmd long flags:
 
@@ -279,6 +283,6 @@ pwsh       -NoProfile -ExecutionPolicy Bypass -File tests\run-tests-installed.ps
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-smoke-agentterm-live.ps1 -AgentTermPath C:\path\to\agentterm.exe
 ```
 
-The installed journey starts from a missing config directory, launches existing and fresh projects through real child PowerShell processes, and checks dynamic/explicit roots, spaces and Unicode, terminal policy arguments, envelope consumption, readiness/exit receipts, the public ledger, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install. On an interactive Windows desktop, `tests\run-smoke-terminal-live.ps1` exercises real `wt.exe`, while `tests\run-smoke-agentterm-live.ps1` verifies the AgentTerm API, stable identities, cwd, prompt, envelope, and receipt lifecycle.
+The installed journey starts from a missing config directory, launches existing and fresh projects through real child PowerShell processes, restores a consumed Windows Terminal command as a prompt-free resume, and checks dynamic/explicit roots, spaces and Unicode, terminal policy arguments, envelope consumption, readiness/exit receipts, the public ledger, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install. On an interactive Windows desktop, `tests\run-smoke-terminal-live.ps1` exercises real `wt.exe`, while `tests\run-smoke-agentterm-live.ps1` exercises a real AgentTerm control plane and takeover-safe shell persistence.
 
 PSScriptAnalyzer gates every push (settings: `tests/PSScriptAnalyzerSettings.psd1`). CI runs everything on `windows-latest`; tag pushes are packaged into GitHub Releases with SHA256SUMS (`scripts/release-local.ps1` reproduces that locally).
