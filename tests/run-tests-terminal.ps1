@@ -41,7 +41,7 @@ exit /b 0
 
     $defaults = Get-LnchTerminalConfig -Agent omp
     Check 'default tab mode' ($defaults.Mode -eq 'tab')
-    Check 'default backend auto' ($defaults.Backend -eq 'auto')
+    Check 'default backend wt' ($defaults.Backend -eq 'wt')
     Check 'current profile captured' ($defaults.Profile -eq $env:WT_PROFILE_ID)
     Check 'agent color selected' ($defaults.TabColor -eq '#123456')
     Check 'title template loaded' ($defaults.TitleTemplate -eq $titleTemplate)
@@ -51,10 +51,13 @@ exit /b 0
     Check 'default profile omits override' ($null -eq $inlinePolicy.Profile)
     $agentTermPolicy = Get-LnchTerminalConfig -Backend agentterm -AgentTermPath 'C:\tools\agentterm.exe' -AgentTermHome $testRoot -AgentTermPort 8123 -Agent omp
     Check 'AgentTerm policy accepted' ($agentTermPolicy.Backend -eq 'agentterm' -and $agentTermPolicy.AgentTermPort -eq 8123 -and $agentTermPolicy.AgentTermHome -eq $testRoot)
+    $autoPolicy = Get-LnchTerminalConfig -Backend auto -Agent omp
+    Check 'explicit auto policy accepted' ($autoPolicy.Backend -eq 'auto')
 
-    $contextA = New-LnchLaunchContext -Name alpha -Directory $projectA -Root $testRoot -Agent omp -Prompt @('hello', 'world') -Verbs @() -Fresh $false -Terminal $defaults
+    $contextA = New-LnchLaunchContext -Name alpha -Directory $projectA -Root $testRoot -Agent omp -Prompt @('hello', 'world') -Verbs @([pscustomobject]@{ Name = 'model'; Value = 'gpt-5.6-sol' }) -Fresh $false -Terminal $defaults
     $contextB = New-LnchLaunchContext -Name beta -Directory $projectB -Root $testRoot -Agent omp -Prompt @() -Verbs @() -Fresh $true -Terminal $defaults
     Check 'unique launch ids' ($contextA.LaunchId -ne $contextB.LaunchId)
+    Check 'launch model captured' ($contextA.Model -eq 'gpt-5.6-sol')
     Check 'launch files written' ((Test-Path (Get-LnchLaunchContextPath $contextA.LaunchId)) -and (Test-Path (Get-LnchLaunchContextPath $contextB.LaunchId)))
     $results = @(Invoke-LnchWindowsTerminal -Contexts @($contextA, $contextB))
     $logged = Get-Content -LiteralPath $wtLog -Raw
@@ -108,20 +111,20 @@ exit /b 0
     Check 'readiness timeout detected' ($timeoutResult.Accepted -and -not $timeoutResult.Ready -and $timeoutResult.Error -eq 'child readiness timeout')
     Remove-Item -LiteralPath (Get-LnchLaunchContextPath $timeoutContext.LaunchId) -Force
 
-    $receiptContext = New-LnchLaunchContext -Name receipt -Directory $projectA -Root $testRoot -Agent omp -Prompt @('do', 'not', 'replay') -Verbs @([pscustomobject]@{ Name = 'yolo' }) -Fresh $true -Terminal $defaults
+    $receiptContext = New-LnchLaunchContext -Name receipt -Directory $projectA -Root $testRoot -Agent omp -Prompt @('do', 'not', 'replay') -Verbs @([pscustomobject]@{ Name = 'yolo' }, [pscustomobject]@{ Name = 'model'; Value = 'opus-4.1' }) -Fresh $true -Terminal $defaults
     $initialContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
-    Check 'initial launch context preserved' ($initialContext.Fresh -and (@($initialContext.Prompt) -join ' ') -eq 'do not replay' -and @($initialContext.Verbs).Count -eq 1)
+    Check 'initial launch context preserved' ($initialContext.Fresh -and (@($initialContext.Prompt) -join ' ') -eq 'do not replay' -and @($initialContext.Verbs).Count -eq 2 -and $initialContext.Model -eq 'opus-4.1')
     Check 'initial launch context consumed atomically' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $receiptContext.LaunchId)))
     $null = Write-LnchTerminalReceipt -Context $initialContext -State child-started
     $duplicateContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
     Check 'active restored duplicate detected' ($duplicateContext.Restored -and $duplicateContext.AlreadyActive)
-    Check 'restored duplicate strips one-shot state' (-not $duplicateContext.Fresh -and @($duplicateContext.Prompt).Count -eq 0 -and @($duplicateContext.Verbs).Count -eq 0)
+    Check 'restored duplicate strips one-shot state' (-not $duplicateContext.Fresh -and @($duplicateContext.Prompt).Count -eq 0 -and @($duplicateContext.Verbs).Count -eq 0 -and $duplicateContext.Model -eq 'opus-4.1')
     $live = Get-LnchTerminalSessions | Where-Object LaunchId -eq $receiptContext.LaunchId
-    Check 'live receipt visible' ($live.Active -and $live.State -eq 'child-started')
+    Check 'live receipt visible' ($live.Active -and $live.State -eq 'child-started' -and $live.Model -eq 'opus-4.1')
     $null = Write-LnchTerminalReceipt -Context $initialContext -State agent-exited -ExitCode 0
     $restoredContext = Receive-LnchLaunchContext -LaunchId $receiptContext.LaunchId
     Check 'exited launch restores as resume' ($restoredContext.Restored -and -not $restoredContext.AlreadyActive -and -not $restoredContext.Fresh)
-    Check 'restored context retains project identity' ($restoredContext.Name -eq 'receipt' -and $restoredContext.Directory -eq $projectA -and $restoredContext.Root -eq $testRoot -and $restoredContext.Agent -eq 'omp')
+    Check 'restored context retains project identity' ($restoredContext.Name -eq 'receipt' -and $restoredContext.Directory -eq $projectA -and $restoredContext.Root -eq $testRoot -and $restoredContext.Agent -eq 'omp' -and $restoredContext.Model -eq 'opus-4.1')
     $restoring = Get-LnchTerminalSessions | Where-Object LaunchId -eq $receiptContext.LaunchId
     Check 'restore claim visible and active' ($restoring.Active -and $restoring.State -eq 'restoring')
     $null = Write-LnchTerminalReceipt -Context $restoredContext -State agent-exited -ExitCode 0

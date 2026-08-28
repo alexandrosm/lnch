@@ -67,6 +67,7 @@ function script:ConvertTo-LnchRestoredContext {
         Directory     = [System.IO.Path]::GetFullPath([string]$Receipt.Directory)
         Root          = [System.IO.Path]::GetFullPath([string]$Receipt.Root)
         Agent         = [string]$Receipt.Agent
+        Model         = $(if ($Receipt.Model) { [string]$Receipt.Model } else { $null })
         Prompt        = @()
         Verbs         = @()
         Fresh         = $false
@@ -130,7 +131,7 @@ function global:Get-LnchTerminalConfig {
     )
     $user = Get-LnchUserConfig
     $terminal = if ($user -and $user.terminal) { $user.terminal } else { $null }
-    $resolvedBackend = if ($Backend) { $Backend } elseif ($terminal.backend) { [string]$terminal.backend } else { 'auto' }
+    $resolvedBackend = if ($Backend) { $Backend } elseif ($terminal.backend) { [string]$terminal.backend } else { 'wt' }
     $resolvedMode = if ($Mode) { $Mode } elseif ($terminal.mode) { [string]$terminal.mode } else { 'tab' }
     $resolvedWindow = if ($Window) { $Window } elseif ($terminal.window) { [string]$terminal.window } else { 'last' }
     $resolvedProfile = if ($ProfileName) { $ProfileName } elseif ($terminal.profile) { [string]$terminal.profile } else { 'current' }
@@ -212,6 +213,8 @@ function global:New-LnchLaunchContext {
     )
     Remove-LnchStaleLaunchFiles
     $id = [guid]::NewGuid().ToString('D')
+    $modelVerb = @($Verbs | Where-Object { $_ -and $_.Name -eq 'model' } | Select-Object -Last 1)
+    $model = if ($modelVerb.Count -gt 0 -and $modelVerb[0].Value) { [string]$modelVerb[0].Value } else { $null }
     $context = [pscustomobject][ordered]@{
         Schema      = 1
         LaunchId    = $id
@@ -220,6 +223,7 @@ function global:New-LnchLaunchContext {
         Directory   = [System.IO.Path]::GetFullPath($Directory)
         Root        = [System.IO.Path]::GetFullPath($Root)
         Agent       = $Agent
+        Model       = $model
         Prompt      = @($Prompt)
         Verbs       = @($Verbs)
         Fresh       = [bool]$Fresh
@@ -302,6 +306,7 @@ function global:Write-LnchTerminalReceipt {
         Directory    = $Context.Directory
         Root         = $Context.Root
         Agent        = $Context.Agent
+        Model        = $Context.Model
         Backend      = $Context.Terminal.Backend
         Window       = $Context.Terminal.Window
         Mode         = $Context.Terminal.Mode
@@ -434,6 +439,7 @@ function global:Get-LnchTerminalSessions {
             Project      = $receipt.Project
             Directory    = $receipt.Directory
             Agent        = $receipt.Agent
+            Model         = $receipt.Model
             Backend      = $receipt.Backend
             Window       = $receipt.Window
             Mode         = $receipt.Mode

@@ -1,7 +1,7 @@
 # CLI shim entry: maps flat argv onto the `lnch` function.
 # Called by shell/lnch-cli.cmd (cmd doskey macro) and shell/lnch.sh (bash/zsh).
-# Flags: --yolo/-yolo, --here/-here, --doctor, --discover, --sessions,
-#        --include-children, --transcript <agent:id>, --tabs, --prune, --json,
+# Flags: --yolo/-yolo, --here/-here, --no-dashboard, --top, --doctor,
+#        --discover, --sessions, --include-children, --transcript <agent:id>, --tabs, --prune, --json,
 #        --terminal/--terminal-backend/--window/--profile/--title-template,
 #        --tab-color/--color-scheme/--agentterm-path/--agentterm-home/--agentterm-port,
 #        --readiness-timeout, --version/-v, --agent <name>, --default-agent <name|none>
@@ -10,6 +10,8 @@ $ErrorActionPreference = 'Stop'
 
 $yolo = $false
 $here = $false
+$noDashboard = $false
+$top = $false
 $doctor = $false
 $discover = $false
 $sessions = $false
@@ -39,6 +41,8 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     $a = $args[$i]
     if ($a -match '^(-yolo|--yolo)$') { $yolo = $true }
     elseif ($a -match '^(-here|--here)$') { $here = $true }
+    elseif ($a -match '^(-no-dashboard|--no-dashboard)$') { $noDashboard = $true }
+    elseif ($a -match '^(-top|--top)$') { $top = $true }
     elseif ($a -match '^(-doctor|--doctor)$') { $doctor = $true }
     elseif ($a -match '^(-discover|--discover)$') { $discover = $true }
     elseif ($a -match '^(-sessions|--sessions)$') { $sessions = $true }
@@ -100,6 +104,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 }
 
 if ($showVersion) { lnch -Version; return }
+if ($top) { lnch -Top -Json:$json; return }
 if ($doctor) { lnch -Doctor; return }
 if ($discover) { lnch -Discover -Json:$json; return }
 if ($sessions) { lnch -Sessions -Name $name -Agent $agent -IncludeChildren:$includeChildren -Json:$json; return }
@@ -110,7 +115,7 @@ if ($setDef -ne '' -or ($setDef -eq '' -and $args -contains '--default-agent') -
     return
 }
 
-$call = @{ Name = $name; Yolo = $yolo; Here = $here }
+$call = @{ Name = $name; Yolo = $yolo; Here = $here; NoDashboard = $noDashboard }
 if ($agent) { $call.Agent = $agent }
 if ($terminalMode) { $call.TerminalMode = $terminalMode }
 if ($terminalBackend) { $call.TerminalBackend = $terminalBackend }

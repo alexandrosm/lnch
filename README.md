@@ -8,7 +8,7 @@ One word from any shell to a running AI coding agent inside a fresh, git-initial
 lnch my-app build a snake game
 ```
 
-creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the most recently used Windows Terminal window** by default, locks the tab title to the project name, and launches your agent with `build a snake game` as its initial prompt.
+creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the most recently used Windows Terminal window** by default, locks the tab title to the project name, launches your agent with `build a snake game` as its initial prompt, and turns the invoking tab into a live agent dashboard.
 
 ## Install
 
@@ -54,8 +54,8 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 
 | Command | Behavior |
 |---|---|
-| `lnch` | Multi-select existing projects with live disk usage, then launch each in its own tab (fzf if installed, else numbered list) |
-| `lnch <name>` | Create (or reopen) `<root>\<name>`. Reopening **auto-resumes** with the agent that last ran there |
+| `lnch` | Multi-select existing projects with live disk usage, launch each in its own tab, then monitor them in the invoking tab |
+| `lnch <name>` | Create (or reopen) `<root>\<name>`, auto-resume its owning agent, and monitor managed launches in the invoking tab |
 | `lnch <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
 | `lnch <name> :<verb>` | Capability verbs (see below) — may appear anywhere among the words |
 | `lnch <name> ... -Yolo` / `--yolo` | Shorthand for `:yolo` |
@@ -63,10 +63,12 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Agent <name>` / `--agent` | Force the agent for a new project |
 | `lnch -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
 | `lnch <name> -TerminalMode <mode>` / `--terminal <mode>` | Choose `tab`, `split-right`, `split-down`, `new-window`, or `inline` |
-| `lnch <name> -TerminalBackend <backend>` / `--backend <backend>` | Choose `auto`, `wt`, `agentterm`, or `inline` |
+| `lnch <name> -TerminalBackend <backend>` / `--backend <backend>` | Choose `wt` (default), `auto`, `agentterm`, or `inline` |
 | `lnch <name> -TerminalWindow <target>` / `--window <target>` | Target `last`, `new`, the shared `lnch` window, a stable per-`project` window, or a custom Windows Terminal window name/ID |
 | `--profile`, `--title-template`, `--tab-color`, `--color-scheme` | Override terminal presentation for one launch |
 | `lnch -Tabs [-Prune] [-Json]` / `lnch --tabs [--prune] [--json]` | Inspect the child-process and terminal-identity runtime ledger |
+| `lnch -Top [-Json]` / `lnch --top [--json]` | Open the live project/agent dashboard, or emit one normalized JSON snapshot |
+| `lnch <name> -NoDashboard` / `--no-dashboard` | Return to the invoking shell after handoff instead of opening the dashboard |
 | `lnch -Version` / `--version` / `-v` | Print engine version |
 | `lnch -Doctor` / `--doctor` | Audit tools, agents, capability matrix, hooks |
 | `lnch -Discover` / `--discover` | Locate the executable and private datastore candidates for all seven built-in agents |
@@ -75,7 +77,7 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | `lnch -Transcript <agent:id> [-Json]` / `--transcript <agent:id>` | Explicitly decode one native transcript into the normalized event schema |
 
 
-Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata. Windows Terminal batches compatible targets into one semicolon-delimited `wt.exe` invocation; AgentTerm creates stable managed tabs through its authenticated control API.
+Bare `lnch` is the multi-project launcher. In fzf, press `Tab` to toggle as many projects as you want, then `Enter`; otherwise the built-in TUI provides checkbox-style selection. Non-interactive/limited hosts retain the `1,3-5` / `all` fallback. Each selected project follows its normal agent/resume metadata. Windows Terminal batches compatible targets into one semicolon-delimited `wt.exe` invocation. After a successful managed launch, an interactive invoking tab becomes the dashboard; `Q` returns to the shell.
 
 ### Project picker UI
 
@@ -94,6 +96,20 @@ Disk usage is the recursive total of readable regular-file lengths; reparse poin
 With fzf, the launcher enables rounded borders, multi-select, inline status, selection markers, and `Ctrl-A`/`Ctrl-D` all/none bindings. Set `LNCH_NO_FZF=1` to force the built-in TUI.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
+### Agent top dashboard
+
+`lnch --top` opens the full-screen dashboard directly. Managed launches enter it automatically when the invoking host is interactive; use `--no-dashboard` or `LNCH_NO_DASHBOARD=1` to opt out. Inline `--here` sessions keep the tab for the agent and therefore do not open the dashboard. `lnch --top --json` emits the same normalized snapshot without entering the TUI.
+
+The dashboard groups each active receipt-rooted process tree by project and refreshes CPU, working/private memory, process count, cumulative I/O, lifecycle state, pinned launch model, and project disk usage. CPU is normalized across logical processors. Disk usage is cached for 60 seconds and `R` forces a fresh scan. Receipt-backed states are `starting`, `running`, `completed`, `failed`, and `stale`; projects without a receipt are `idle`.
+
+Model is shown only when it was explicitly pinned with `:model`; otherwise it remains `unknown`. Cost remains `unknown` until an agent/provider adapter can supply reported usage or an attributable token estimate—lnch never renders a fabricated `$0.00`.
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Select a project and update its process/I/O detail panel |
+| `R` | Refresh immediately and invalidate the disk-usage cache |
+| `Q` / `Esc` | Leave the dashboard and return to the invoking shell |
+
 By default, the project root is the `projects` subfolder of your **current working directory** at the moment you invoke `lnch` (for example, from `D:\work`, `lnch api` creates `D:\work\projects\api`). Set `LNCH_PROJECTS_DIR` to override that root explicitly. The resolved root is captured before any terminal handoff and reused inside the child process; changing the terminal's working directory never creates a recursive `<project>\projects\<project>` path.
 
 ## Terminal backends and lifecycle
@@ -106,7 +122,7 @@ Per-launch PowerShell parameters and their bash/cmd long flags:
 
 | Policy | Values |
 |---|---|
-| `-TerminalBackend` / `--backend` | `auto` (default), `wt`, `agentterm`, `inline` |
+| `-TerminalBackend` / `--backend` | `wt` (default), `auto`, `agentterm`, `inline` |
 | `-TerminalMode` / `--terminal` | `tab` (default), `split-right`, `split-down`, `new-window`, `inline` |
 | `-TerminalWindow` / `--window` | `last` (default), `new`, `lnch`, `project`, or a custom Windows Terminal name/integer ID |
 | `-TerminalProfile` / `--profile` | `current` (default; uses `WT_PROFILE_ID`), `default`, profile name, or GUID |
@@ -124,7 +140,7 @@ Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values
 {
   "defaultAgent": "omp",
   "terminal": {
-    "backend": "auto",
+    "backend": "wt",
     "mode": "tab",
     "window": "last",
     "profile": "current",
@@ -143,7 +159,7 @@ Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values
 }
 ```
 
-With `backend: auto`, an already-running AgentTerm instance wins; otherwise Windows Terminal is preferred, then an installed AgentTerm, then inline fallback. An explicit backend never silently impersonates unsupported behavior. AgentTerm currently supports managed `tab` mode; Windows Terminal supplies tab, split, and new-window modes.
+Windows Terminal is the default backend. Explicit `backend: auto` retains capability detection: a running AgentTerm instance wins, otherwise Windows Terminal is preferred, then an installed AgentTerm, then inline fallback. Explicit `agentterm` remains available, but the current dashboard/control work targets Windows Terminal first. An explicit backend never silently impersonates unsupported behavior.
 
 Windows Terminal new-tab actions pass `--inheritEnvironment` explicitly. Split-pane actions use Windows Terminal's split command contract, which does not expose that flag. AgentTerm launches use its loopback-only bearer-authenticated API and record the returned stable tab ID, session UUID, and shell PID before submitting the child command. `lnch` waits for a child receipt before reporting a launch ready; an accepted command with no receipt produces a warning containing the launch ID instead of a false success.
 

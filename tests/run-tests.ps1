@@ -123,6 +123,27 @@ try {
     $pickerLines = Get-Content -LiteralPath (Join-Path $TestRoot 'fzf-project-lines.txt') -Raw
     Check 'E4 picker size column' ($pickerLines -match '(?m)^usage-fixture\s+\|.*\|\s+3 KB\s+\|')
 
+    Write-Host '=== E5: live project dashboard telemetry ==='
+    $dashboardTerminal = Get-LnchTerminalConfig -Backend wt -ReadinessTimeoutMs 0 -Agent omp
+    $dashboardContext = New-LnchLaunchContext -Name 'usage-fixture' -Directory $usageRoot -Root $Projects -Agent omp -Prompt @() -Verbs @([pscustomobject]@{ Name = 'model'; Value = 'gpt-5.6-sol' }) -Fresh $false -Terminal $dashboardTerminal
+    $null = Write-LnchTerminalReceipt -Context $dashboardContext -State agent-running
+    $dashboardSnapshot = Get-LnchProjectDashboardSnapshot -Root $Projects
+    $usageTelemetry = @($dashboardSnapshot.Projects | Where-Object Name -eq 'usage-fixture')[0]
+    Check 'E5 schema' ($dashboardSnapshot.Schema -eq 1 -and $dashboardSnapshot.Root -eq [System.IO.Path]::GetFullPath($Projects))
+    Check 'E5 active process tree' ($usageTelemetry.State -eq 'running' -and $usageTelemetry.ActiveSessions -eq 1 -and $usageTelemetry.ProcessCount -ge 1 -and $usageTelemetry.WorkingSetBytes -gt 0)
+    Check 'E5 disk and model' ($usageTelemetry.DiskBytes -eq 3072 -and $usageTelemetry.Model -eq 'gpt-5.6-sol' -and $usageTelemetry.ModelSource -eq 'launch')
+    Check 'E5 cost remains unknown' ($null -eq $usageTelemetry.Cost -and $usageTelemetry.CostKind -eq 'unknown')
+    $dashboardFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 132 -Height 24 -SelectedIndex 0
+    Check 'E5 pretty frame' ($dashboardFrame -match 'LNCH TOP' -and $dashboardFrame -match 'usage-fixture' -and $dashboardFrame -match 'RUNNING' -and $dashboardFrame -match 'MODEL' -and $dashboardFrame -match 'COST')
+    $topJson = ((& $__lnchFn -Top -Json) -join [Environment]::NewLine) | ConvertFrom-Json
+    Check 'E5 top JSON' ($topJson.Schema -eq 1 -and @($topJson.Projects | Where-Object Name -eq 'usage-fixture').Count -eq 1)
+    $env:LNCH_NO_DASHBOARD = '1'
+    Check 'E5 dashboard opt-out' (-not (Test-LnchDashboardAutoStart))
+    Remove-Item Env:LNCH_NO_DASHBOARD -ErrorAction SilentlyContinue
+    $null = Write-LnchTerminalReceipt -Context $dashboardContext -State agent-exited -ExitCode 0
+    Remove-Item -LiteralPath (Get-LnchLaunchContextPath $dashboardContext.LaunchId) -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path (Join-Path $env:LNCH_RUNTIME_DIR 'sessions') "$($dashboardContext.LaunchId).json") -Force -ErrorAction SilentlyContinue
+
     Write-Host '=== F: versioned new-tab launch envelope ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
     $out = & $__lnchFn epsilon hi there
@@ -228,8 +249,12 @@ try {
 
     Write-Host '=== O: entry.ps1 --agent passthrough ==='
     $entry = Join-Path $LnchDir 'entry.ps1'
-    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude kappa2 ship it --here 2>&1
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude kappa2 ship it --here --no-dashboard 2>&1
     Check 'O entry agent'  (($out -join ' ') -match '\[claude-stub\] args="ship it"')
+    $entryTopOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --top --json 2>&1
+    $entryTop = $null
+    try { $entryTop = (($entryTopOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
+    Check 'O entry top JSON' ($entryTop -and $entryTop.Schema -eq 1 -and @($entryTop.Projects).Count -gt 0)
 
     Write-Host '=== P: :pick replaces base resume ==='
     $out = & $__lnchFn alpha :pick -Here 2>&1

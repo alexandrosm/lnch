@@ -1,10 +1,11 @@
 # lnch: the `lnch` command for PowerShell.
 #
-#   lnch                      pick an existing project (fzf if installed, else numbered list;
-#                              shows saved intent + disk usage + last-active time)
+#   lnch                      pick projects, launch them in Windows Terminal tabs,
+#                              then monitor them in the invoking tab
 #   lnch <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
-#                              extra words become the agent's initial prompt AND are saved
-#                              as the project's intent
+#                              extra words become the saved intent and the invoking tab
+#                              becomes the live dashboard
+#   lnch -Top                 open the dashboard without launching
 #   lnch <name> ... -Yolo     shorthand for the :yolo capability
 #
 #   CAPABILITY VERBS (may appear anywhere among the prompt words):
@@ -44,6 +45,7 @@ $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'open
 . (Join-Path $script:LnchRoot 'WindowsTerminal.ps1')
 . (Join-Path $script:LnchRoot 'AgentTerm.ps1')
 . (Join-Path $script:LnchRoot 'TranscriptDiscovery.ps1')
+. (Join-Path $script:LnchRoot 'Dashboard.ps1')
 
 # Built-in registry: capability manifest per agent. Only VERIFIED mappings ship;
 # agents.json fills the gaps (that is the point of the tent).
@@ -564,6 +566,7 @@ function global:lnch {
         [string[]]$Prompt,
         [switch]$Yolo,
         [switch]$Here,
+        [switch]$NoDashboard,
         [switch]$FromLauncher,
         [string]$LaunchId,
         [string]$RuntimeRoot,
@@ -576,6 +579,7 @@ function global:lnch {
         [switch]$Sessions,
         [switch]$IncludeChildren,
         [string]$Transcript,
+        [switch]$Top,
         [switch]$Tabs,
         [switch]$Prune,
         [string]$TerminalMode,
@@ -608,6 +612,11 @@ function global:lnch {
     }
     if ($Transcript) {
         Show-LnchSessionTranscript -Reference $Transcript -Agent $Agent -Json:$Json
+        return
+    }
+    if ($Top) {
+        $dashboardRoot = if ($ResolvedRoot) { [System.IO.Path]::GetFullPath($ResolvedRoot) } else { Get-LnchProjectsRoot }
+        Show-LnchDashboard -Root $dashboardRoot -Json:$Json
         return
     }
     if ($Tabs) {
@@ -764,17 +773,22 @@ function global:lnch {
                 if ($null -ne $AgentTermPort) { $invoke.AgentTermPort = $AgentTermPort }
                 & $startFn @invoke
             }
+            $managedLaunches = 0
             if ($batch.Count -gt 0) {
                 $launchResults = @(Invoke-LnchTerminal -Contexts $batch.ToArray())
                 foreach ($launchResult in $launchResults) {
                     if ($launchResult.Accepted) {
                         if (-not $launchResult.Ready) { Write-Warning "terminal accepted $($launchResult.Context.Name), but child readiness timed out (launch $($launchResult.Context.LaunchId))" }
                         else { Write-Host "-> $($launchResult.Context.Name) opened in $($launchResult.Context.Terminal.Backend)" }
+                        $managedLaunches++
                     } else {
                         Write-Warning "$($launchResult.Error); launching $($launchResult.Context.Name) inline"
                         & $startFn -FromLauncher -LaunchId $launchResult.Context.LaunchId -RuntimeRoot $launchResult.Context.RuntimeRoot
                     }
                 }
+            }
+            if ($managedLaunches -gt 0 -and (Test-LnchDashboardAutoStart -NoDashboard:$NoDashboard)) {
+                Show-LnchDashboard -Root $rootFull
             }
             return
         }
@@ -923,6 +937,9 @@ function global:lnch {
             if ($launchResult.Accepted) {
                 if (-not $launchResult.Ready) { Write-Warning "terminal accepted $Name, but child readiness timed out (launch $($context.LaunchId))" }
                 else { Write-Host "-> $Name opened in $($context.Terminal.Backend)" }
+                if (Test-LnchDashboardAutoStart -NoDashboard:$NoDashboard) {
+                    Show-LnchDashboard -Root $rootFull
+                }
                 return
             }
             Write-Warning "$($launchResult.Error); launching inline instead"

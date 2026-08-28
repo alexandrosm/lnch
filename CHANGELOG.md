@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added a colorful `lnch --top` dashboard with project-grouped process-tree CPU, memory, process count, cumulative I/O, disk usage, receipt state, pinned model, detail navigation, responsive layouts, and a schema-1 JSON snapshot.
+- Managed interactive launches now leave the invoking tab in the dashboard after Windows Terminal handoff; `--no-dashboard` and `LNCH_NO_DASHBOARD=1` preserve one-shot behavior. Model pins persist through launch receipts and restored tabs, while unavailable cost remains explicitly unknown.
+- Made Windows Terminal the default backend. `auto` and explicit `agentterm` remain available for opt-in capability selection.
+
 ## v1.5.0
 
 - Added AgentTerm as a managed terminal backend with `auto`/`wt`/`agentterm`/`inline` selection, bearer-authenticated tab creation, stable tab/session/process identities, startup command handoff, existing-instance reuse, multi-project tab launches, and backend-aware runtime receipts.
