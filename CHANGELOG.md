@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## v1.6.0
 
+- Named project launches (`lnch <name>`) now run in the current terminal by default. Use `--terminal tab` or a saved `terminal.mode` to opt into managed terminals; picker and dashboard launches retain their tab default, and `--here` still forces inline execution.
+- Restored the invoking directory after inline launches, including startup failures, so repeated named launches resume the original project instead of creating nested project directories.
+- Preserved agent exit codes through the CLI entry script, cmd shim, and managed child entry script instead of reporting success after an agent failure.
 - Added a colorful `lnch --top` dashboard with project-grouped process-tree CPU, memory, process count, cumulative I/O, disk usage, receipt state, pinned model, detail navigation, responsive layouts, and a schema-1 JSON snapshot.
+- Moved dashboard telemetry refreshes onto a persistent background runspace and separated data refresh from frame rendering, so navigation and resize input no longer wait for process discovery; cursor-home repainting also removes full-screen clear flicker.
+- Added an in-dashboard `N` flow for naming a project, cycling installed agents, and launching the new project into the configured managed terminal without leaving or blocking the dashboard.
+- Every Git repository initialized by lnch now receives a repository-local author identity. Interactive CLI and dashboard flows offer lnch defaults, global Git and environment identities, GitHub private/public profile choices, or custom name/email; `--git-name` and `--git-email` provide an explicit non-interactive override.
 - Managed interactive launches now leave the invoking tab in the dashboard after Windows Terminal handoff; `--no-dashboard` and `LNCH_NO_DASHBOARD=1` preserve one-shot behavior. Model pins persist through launch receipts and restored tabs, while unavailable cost remains explicitly unknown.
 - Made Windows Terminal the default backend. `auto` and explicit `agentterm` remain available for opt-in capability selection.
 - Deferred recursive project disk scans until an explicit dashboard refresh, preventing large project roots from blocking the first frame.

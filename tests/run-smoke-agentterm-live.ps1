@@ -40,7 +40,7 @@ exit /b 0
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $config 'config.json') -Encoding utf8
 
     . (Join-Path $lnchRoot 'Lnch.ps1')
-    lnch -Name agentterm-live -Prompt @('real', 'terminal') -Agent omp -TerminalBackend agentterm -ReadinessTimeoutMs 15000
+    lnch -Name agentterm-live -Prompt @('real', 'terminal') -Agent omp -GitName 'Lnch Smoke' -GitEmail 'lnch-smoke@example.invalid' -TerminalBackend agentterm -TerminalMode tab -ReadinessTimeoutMs 15000
 
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $receipt = $null

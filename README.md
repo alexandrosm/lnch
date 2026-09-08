@@ -8,7 +8,7 @@ One word from any shell to a running AI coding agent inside a fresh, git-initial
 lnch my-app build a snake game
 ```
 
-creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, opens a **new tab in the most recently used Windows Terminal window** by default, locks the tab title to the project name, launches your agent with `build a snake game` as its initial prompt, and turns the invoking tab into a live agent dashboard.
+creates the project folder, runs `git init`, seeds an **AGENTS.md** skeleton (the cross-harness instruction standard) with `CLAUDE.md`/`GEMINI.md` pointers, and launches your agent **in the current terminal** with `build a snake game` as its initial prompt. Add `--terminal tab` to open a new Windows Terminal tab and monitor the managed launch in the invoking tab's dashboard.
 
 ## Install
 
@@ -55,14 +55,15 @@ All three drive one engine (`Lnch.ps1`), so resume detection, the capability reg
 | Command | Behavior |
 |---|---|
 | `lnch` | Multi-select existing projects with live disk usage, launch each in its own tab, then monitor them in the invoking tab |
-| `lnch <name>` | Create (or reopen) `<root>\<name>`, auto-resume its owning agent, and monitor managed launches in the invoking tab |
+| `lnch <name>` | Create (or reopen) `<root>\<name>` and auto-resume its owning agent in the current terminal by default |
 | `lnch <name> words...` | Extra words become the agent's initial prompt *and* are saved as the project's intent |
 | `lnch <name> :<verb>` | Capability verbs (see below) — may appear anywhere among the words |
 | `lnch <name> ... -Yolo` / `--yolo` | Shorthand for `:yolo` |
-| `lnch <name> ... -Here` / `--here` | Launch in the current window instead of a new tab |
+| `lnch <name> ... -Here` / `--here` | Force the current terminal, overriding a saved terminal mode |
 | `lnch -Agent <name>` / `--agent` | Force the agent for a new project |
+| `lnch <name> -GitName <name> -GitEmail <email>` / `--git-name ... --git-email ...` | Set the new repository's local Git author identity explicitly |
 | `lnch -SetDefaultAgent <name>` / `--default-agent` | Persist the default agent (`none` clears) |
-| `lnch <name> -TerminalMode <mode>` / `--terminal <mode>` | Choose `tab`, `split-right`, `split-down`, `new-window`, or `inline` |
+| `lnch <name> -TerminalMode <mode>` / `--terminal <mode>` | Choose `inline` (default for named launches), `tab`, `split-right`, `split-down`, or `new-window` |
 | `lnch <name> -TerminalBackend <backend>` / `--backend <backend>` | Choose `wt` (default), `auto`, `agentterm`, or `inline` |
 | `lnch <name> -TerminalWindow <target>` / `--window <target>` | Target `last`, `new`, the shared `lnch` window, a stable per-`project` window, or a custom Windows Terminal window name/ID |
 | `--profile`, `--title-template`, `--tab-color`, `--color-scheme` | Override terminal presentation for one launch |
@@ -96,17 +97,24 @@ Disk usage is the recursive total of readable regular-file lengths; reparse poin
 With fzf, the launcher enables rounded borders, multi-select, inline status, selection markers, and `Ctrl-A`/`Ctrl-D` all/none bindings. Set `LNCH_NO_FZF=1` to force the built-in TUI.
 New projects choose their agent in this order: explicit `-Agent` → persisted default → sole installed agent → **interactive picker over installed agents** → omp fallback.
 
+Every repository initialized by lnch receives repository-local `user.name` and `user.email` values; lnch never changes global Git configuration. In an interactive shell, the identity picker offers the configured `gitIdentity` default, global Git identity, `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`, the authenticated GitHub CLI profile (privacy-safe `users.noreply.github.com` and public-email choices), and custom name/email entry. Press `Enter` for the first choice. Non-interactive launches use the first valid default; `-GitName` plus `-GitEmail` (or `--git-name` plus `--git-email`) always win. Set `LNCH_NO_GH_IDENTITY=1` to skip GitHub profile discovery.
+
 ### Agent top dashboard
 
-`lnch --top` opens the full-screen dashboard directly. Managed launches enter it automatically when the invoking host is interactive; use `--no-dashboard` or `LNCH_NO_DASHBOARD=1` to opt out. Inline `--here` sessions keep the tab for the agent and therefore do not open the dashboard. `lnch --top --json` emits the same normalized snapshot without entering the TUI.
+`lnch --top` opens the full-screen dashboard directly. Managed launches enter it automatically when the invoking host is interactive; use `--no-dashboard` or `LNCH_NO_DASHBOARD=1` to opt out. Inline sessions (the named-launch default, or `--here`) keep the tab for the agent and therefore do not open the dashboard. `lnch --top --json` emits the same normalized snapshot without entering the TUI.
 
-The dashboard groups each active receipt-rooted process tree by project and refreshes CPU, working/private memory, process count, cumulative I/O, lifecycle state, pinned launch model, and project disk usage. CPU is normalized across logical processors. The first frame defers recursive disk scans so large project roots appear immediately; unknown values render as `--`. Press `R` to measure disk usage, cache it for 60 seconds, and refresh the frame. Receipt-backed states are `starting`, `running`, `completed`, `failed`, and `stale`; projects without a receipt are `idle`.
+The dashboard groups each active receipt-rooted process tree by project and refreshes CPU, working/private memory, process count, cumulative I/O, lifecycle state, pinned launch model, and project disk usage. Telemetry collection and Git identity discovery run in background PowerShell pipelines, so selection, resize, and form input repaint immediately instead of waiting for process discovery or `gh`. CPU is normalized across logical processors. The first frame defers recursive disk scans so large project roots appear immediately; unknown values render as `--`. Press `R` to measure disk usage, cache it for 60 seconds, and refresh the frame. Receipt-backed states are `starting`, `running`, `completed`, `failed`, and `stale`; projects without a receipt are `idle`.
 
 Model is shown only when it was explicitly pinned with `:model`; otherwise it remains `unknown`. Cost remains `unknown` until an agent/provider adapter can supply reported usage or an attributable token estimate—lnch never renders a fabricated `$0.00`.
 
 | Key | Action |
 |---|---|
-| `Up` / `Down` | Select a project and update its process/I/O detail panel |
+| `Up` / `Down` | Select a project outside the form; move between fields inside it |
+| `N` | Open the new-project form without leaving the dashboard |
+| Type, `Backspace` | Edit the focused project-name or custom-identity field |
+| `Tab` / `Shift-Tab` | Move between project, agent, identity, and custom name/email fields |
+| `Left` / `Right` | Cycle installed agents or discovered Git identities on the focused choice field |
+| `Enter` | Validate the project and identity, then launch the agent in the configured managed terminal |
 | `R` | Measure project disk usage and refresh immediately |
 | `Q` / `Esc` | Leave the dashboard and return to the invoking shell |
 
@@ -114,7 +122,13 @@ By default, the project root is the `projects` subfolder of your **current worki
 
 ## Terminal backends and lifecycle
 
-`lnch` treats terminal hosts as replaceable transport adapters. Parent and child exchange a schema-versioned JSON envelope under `%LOCALAPPDATA%\lnch\runtime\launches` (override with `LNCH_RUNTIME_DIR`); the child consumes that file, verifies the exact project directory, and publishes lifecycle receipts under `runtime\sessions`. Prompt arrays, capability verbs, resolved root, selected agent, launch policy, and a unique launch ID therefore survive spaces, Unicode, and concurrent launches without process-global `LNCH_NAME`/`LNCH_PROMPT` variables.
+Named launches (`lnch <name>`) default to the current terminal. Use `lnch <name> --terminal tab` (PowerShell: `-TerminalMode tab`) to opt into a new tab. The bare project picker and dashboard launches still default to managed tabs. Explicit terminal modes and saved `terminal.mode` settings take precedence over these defaults; `--here` forces inline execution.
+
+Inline launches run the agent and post-create hooks inside the project, then restore the invoking directory even if agent startup fails. Consecutive `lnch <name>` commands therefore reuse the same default project root rather than creating nested `projects` directories.
+
+Inline CLI launches preserve the agent's exit code through the PowerShell entry script and bash/cmd shims, so shell conditionals can detect failures. Managed child processes also return the agent's exit code when they finish; the parent managed launch reports terminal handoff, not the eventual agent result.
+
+For managed launches, `lnch` treats terminal hosts as replaceable transport adapters. Parent and child exchange a schema-versioned JSON envelope under `%LOCALAPPDATA%\lnch\runtime\launches` (override with `LNCH_RUNTIME_DIR`); the child consumes that file, verifies the exact project directory, and publishes lifecycle receipts under `runtime\sessions`. Prompt arrays, capability verbs, resolved root, selected agent, launch policy, and a unique launch ID therefore survive spaces, Unicode, and concurrent launches without process-global `LNCH_NAME`/`LNCH_PROMPT` variables.
 
 Windows Terminal may replay a tab's original command after an application or machine restart, long after the one-shot launch envelope was consumed. In that path `lnch` rebuilds a resume-only context from the durable lifecycle receipt: project/root/agent identity is preserved, while the original prompt, fresh-project state, and capability verbs are never replayed. If that launch process is still active, the duplicate restored command exits cleanly instead of starting a second agent.
 
@@ -123,7 +137,7 @@ Per-launch PowerShell parameters and their bash/cmd long flags:
 | Policy | Values |
 |---|---|
 | `-TerminalBackend` / `--backend` | `wt` (default), `auto`, `agentterm`, `inline` |
-| `-TerminalMode` / `--terminal` | `tab` (default), `split-right`, `split-down`, `new-window`, `inline` |
+| `-TerminalMode` / `--terminal` | `inline` (named-launch default), `tab` (picker/dashboard default), `split-right`, `split-down`, `new-window` |
 | `-TerminalWindow` / `--window` | `last` (default), `new`, `lnch`, `project`, or a custom Windows Terminal name/integer ID |
 | `-TerminalProfile` / `--profile` | `current` (default; uses `WT_PROFILE_ID`), `default`, profile name, or GUID |
 | `-TerminalTitle` / `--title-template` | Template with `{project}`, `{agent}`, and `{status}` (`new` or `resume`) |
@@ -134,14 +148,17 @@ Per-launch PowerShell parameters and their bash/cmd long flags:
 | `-AgentTermHome` / `--agentterm-home` | AgentTerm state root; defaults to `AGENTTERM_HOME`, then `%USERPROFILE%` |
 | `-AgentTermPort` / `--agentterm-port` | AgentTerm control port; default `7685` |
 
-Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values win:
+Persistent settings live in `%APPDATA%\lnch\config.json` and command-line values win. Omit `terminal.mode` to keep the defaults above, or add `"mode": "tab"` to opt named launches into tabs persistently:
 
 ```json
 {
   "defaultAgent": "omp",
+  "gitIdentity": {
+    "name": "Alex Hero",
+    "email": "alex@example.com"
+  },
   "terminal": {
     "backend": "wt",
-    "mode": "tab",
     "window": "last",
     "profile": "current",
     "titleTemplate": "{project} · {agent} · {status}",
@@ -159,7 +176,7 @@ Persistent defaults live in `%APPDATA%\lnch\config.json` and command-line values
 }
 ```
 
-Windows Terminal is the default backend. Explicit `backend: auto` retains capability detection: a running AgentTerm instance wins, otherwise Windows Terminal is preferred, then an installed AgentTerm, then inline fallback. Explicit `agentterm` remains available, but the current dashboard/control work targets Windows Terminal first. An explicit backend never silently impersonates unsupported behavior.
+Windows Terminal is the default backend for managed launches; choosing a backend alone does not change the terminal mode. Explicit `backend: auto` retains capability detection: a running AgentTerm instance wins, otherwise Windows Terminal is preferred, then an installed AgentTerm, then inline fallback. Explicit `agentterm` remains available, but the current dashboard/control work targets Windows Terminal first. An explicit backend never silently impersonates unsupported behavior.
 
 Windows Terminal new-tab actions pass `--inheritEnvironment` explicitly. Split-pane actions use Windows Terminal's split command contract, which does not expose that flag. AgentTerm launches use its loopback-only bearer-authenticated API and record the returned stable tab ID, session UUID, and shell PID before submitting the child command. `lnch` waits for a child receipt before reporting a launch ready; an accepted command with no receipt produces a warning containing the launch ID instead of a false success.
 
@@ -277,6 +294,10 @@ User config lives in `%APPDATA%\lnch\config.json`:
 ```json
 {
   "defaultAgent": "omp",
+  "gitIdentity": {
+    "name": "Alex Hero",
+    "email": "alex@example.com"
+  },
   "postCreate": ["npm init -y", "git config commit.template .gitmessage"]
 }
 ```

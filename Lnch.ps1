@@ -2,9 +2,8 @@
 #
 #   lnch                      pick projects, launch them in Windows Terminal tabs,
 #                              then monitor them in the invoking tab
-#   lnch <name> [words...]    create <root>\<name> + git repo, launch agent in a NEW TAB;
-#                              extra words become the saved intent and the invoking tab
-#                              becomes the live dashboard
+#   lnch <name> [words...]    create <root>\<name> + git repo, launch agent inline;
+#                              extra words become the saved intent
 #   lnch -Top                 open the dashboard without launching
 #   lnch <name> ... -Yolo     shorthand for the :yolo capability
 #
@@ -28,7 +27,7 @@
 #          plus optional takesPromptOnResume
 #     v0.3 legacy: continueArgs / takesPromptOnContinue / yoloFlags (auto-migrated)
 #
-#   -Here   launch inline instead of a new tab.
+#   -Here   force inline; -TerminalMode tab opts into a new tab.
 #   Root:   $env:LNCH_PROJECTS_DIR, otherwise <current working directory>\projects
 #   Config: %APPDATA%\lnch\config.json (override dir: $env:LNCH_CONFIG_DIR)
 #   Discover: --discover [--json],
@@ -36,7 +35,7 @@
 #             --transcript <agent:session-id> [--json]
 
 $script:LnchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$script:LnchVersion = '1.5.0'
+$script:LnchVersion = '1.6.0'
 $script:KnownVerbs = @('pick', 'yolo', 'plan', 'edits', 'resume', 'resume-pick', 'model')
 $script:BuiltInAgentNames = @('omp', 'claude', 'codex', 'gemini', 'aider', 'opencode', 'qwen')
 . (Join-Path $script:LnchRoot 'AgentDiscovery.ps1')
@@ -205,6 +204,183 @@ function global:Set-LnchDefaultAgent {
     }
     if ([string]::IsNullOrWhiteSpace($Agent)) { Write-Host 'default agent cleared' }
     else { Write-Host "default agent set to '$($Agent.Trim())'" }
+}
+
+$script:LnchGitHubIdentityChecked = $false
+$script:LnchGitHubIdentityCache = $null
+
+function script:Resolve-LnchGitIdentityValues {
+    param(
+        [AllowEmptyString()][string]$Name,
+        [AllowEmptyString()][string]$Email,
+        [string]$Source = 'custom',
+        [string]$Label
+    )
+    $resolvedName = if ($null -eq $Name) { '' } else { $Name.Trim() }
+    $resolvedEmail = if ($null -eq $Email) { '' } else { $Email.Trim() }
+    $errorMessage = $null
+    if ([string]::IsNullOrWhiteSpace($resolvedName)) {
+        $errorMessage = 'Git user.name cannot be empty.'
+    } elseif ([string]::IsNullOrWhiteSpace($resolvedEmail)) {
+        $errorMessage = 'Git user.email cannot be empty.'
+    } elseif ($resolvedEmail -notmatch '^[^@\s]+@[^@\s]+$') {
+        $errorMessage = 'Git user.email must be an email address.'
+    }
+    [pscustomobject]@{
+        Valid  = [string]::IsNullOrWhiteSpace($errorMessage)
+        Name   = $resolvedName
+        Email  = $resolvedEmail
+        Source = $Source
+        Label  = if ($Label) { $Label } else { "$resolvedName <$resolvedEmail>" }
+        Custom = $Source -eq 'custom'
+        Error  = $errorMessage
+    }
+}
+
+function script:Get-LnchGitHubIdentity {
+    if ($script:LnchGitHubIdentityChecked) { return $script:LnchGitHubIdentityCache }
+    $script:LnchGitHubIdentityChecked = $true
+    if ($env:LNCH_NO_GH_IDENTITY) { return $null }
+    $gh = @(Get-Command gh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if (-not $gh) { return $null }
+    try {
+        $json = @(& $gh.Source api user 2>$null) -join [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+        $githubProfile = $json | ConvertFrom-Json
+        if (-not $githubProfile.login) { return $null }
+        $script:LnchGitHubIdentityCache = [pscustomobject]@{
+            Login = [string]$githubProfile.login
+            Name  = if ($githubProfile.name) { [string]$githubProfile.name } else { [string]$githubProfile.login }
+            Email = if ($githubProfile.email) { [string]$githubProfile.email } else { $null }
+            Id    = if ($githubProfile.id) { [long]$githubProfile.id } else { $null }
+        }
+    } catch {
+        $script:LnchGitHubIdentityCache = $null
+    }
+    $script:LnchGitHubIdentityCache
+}
+
+function global:Get-LnchGitIdentityCandidates {
+    $items = New-Object 'System.Collections.Generic.List[object]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $addIdentity = {
+        param([string]$Id, [string]$Name, [string]$Email, [string]$Source, [string]$Prefix)
+        $identity = Resolve-LnchGitIdentityValues -Name $Name -Email $Email -Source $Source
+        if (-not $identity.Valid) { return }
+        $key = "$($identity.Name)`0$($identity.Email)"
+        if (-not $seen.Add($key)) { return }
+        $items.Add([pscustomobject]@{
+            Id     = $Id
+            Label  = "$Prefix`: $($identity.Name) <$($identity.Email)>"
+            Name   = $identity.Name
+            Email  = $identity.Email
+            Source = $Source
+            Custom = $false
+        }) | Out-Null
+    }
+
+    $config = Get-LnchUserConfig
+    if ($config -and $config.gitIdentity) {
+        & $addIdentity 'configured' ([string]$config.gitIdentity.name) ([string]$config.gitIdentity.email) 'configured' 'lnch default'
+    }
+
+    $git = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if ($git) {
+        $globalName = @(& $git.Source config --global --get user.name 2>$null | Select-Object -First 1)
+        $globalEmail = @(& $git.Source config --global --get user.email 2>$null | Select-Object -First 1)
+        if ($globalName.Count -gt 0 -and $globalEmail.Count -gt 0) {
+            & $addIdentity 'git-global' ([string]$globalName[0]) ([string]$globalEmail[0]) 'git-global' 'Git global'
+        }
+    }
+
+    if ($env:GIT_AUTHOR_NAME -and $env:GIT_AUTHOR_EMAIL) {
+        & $addIdentity 'git-environment' $env:GIT_AUTHOR_NAME $env:GIT_AUTHOR_EMAIL 'git-environment' 'Git environment'
+    }
+
+    $github = Get-LnchGitHubIdentity
+    if ($github) {
+        $noreplyEmail = if ($github.Id) {
+            "$($github.Id)+$($github.Login)@users.noreply.github.com"
+        } else {
+            "$($github.Login)@users.noreply.github.com"
+        }
+        & $addIdentity 'github-noreply' $github.Name $noreplyEmail 'github' 'GitHub private email'
+        if ($github.Email -and $github.Email -ne $noreplyEmail) {
+            & $addIdentity 'github-public' $github.Name $github.Email 'github' 'GitHub public email'
+        }
+    }
+
+    $items.Add([pscustomobject]@{
+        Id = 'custom'; Label = 'Custom name and email...'; Name = ''; Email = ''; Source = 'custom'; Custom = $true
+    }) | Out-Null
+    @($items.ToArray())
+}
+
+function script:Select-LnchGitIdentity {
+    param([object[]]$Candidates)
+    $choices = @($Candidates)
+    if ($choices.Count -eq 0) { $choices = @(Get-LnchGitIdentityCandidates) }
+    Write-Host 'Choose the Git identity for this repository:'
+    for ($index = 0; $index -lt $choices.Count; $index++) {
+        Write-Host ('{0,3}. {1}' -f ($index + 1), $choices[$index].Label)
+    }
+
+    while ($true) {
+        $answer = Read-Host 'identity number (blank = 1; q = cancel)'
+        if ([string]::IsNullOrWhiteSpace($answer)) { $answer = '1' }
+        if ($answer -match '^(q|quit|cancel)$') { return $null }
+        if ($answer -notmatch '^\d+$') {
+            Write-Warning 'Enter one of the identity numbers.'
+            continue
+        }
+        $selectedIndex = [int]$answer - 1
+        if ($selectedIndex -lt 0 -or $selectedIndex -ge $choices.Count) {
+            Write-Warning 'Enter one of the identity numbers.'
+            continue
+        }
+        $selected = $choices[$selectedIndex]
+        if (-not $selected.Custom) { return $selected }
+
+        while ($true) {
+            $customName = Read-Host 'Git user.name (blank cancels)'
+            if ([string]::IsNullOrWhiteSpace($customName)) { return $null }
+            $customEmail = Read-Host 'Git user.email (blank cancels)'
+            if ([string]::IsNullOrWhiteSpace($customEmail)) { return $null }
+            $custom = Resolve-LnchGitIdentityValues -Name $customName -Email $customEmail -Source custom
+            if ($custom.Valid) { return $custom }
+            Write-Warning $custom.Error
+        }
+    }
+}
+
+function script:Resolve-LnchRepositoryGitIdentity {
+    param(
+        [AllowEmptyString()][string]$GitName,
+        [AllowEmptyString()][string]$GitEmail
+    )
+    if ($GitName -or $GitEmail) {
+        $explicit = Resolve-LnchGitIdentityValues -Name $GitName -Email $GitEmail -Source custom
+        if (-not $explicit.Valid) { throw $explicit.Error }
+        return $explicit
+    }
+
+    $candidates = @(Get-LnchGitIdentityCandidates)
+    if (Test-LnchInteractiveTerminal) { return Select-LnchGitIdentity -Candidates $candidates }
+    $automatic = @($candidates | Where-Object { -not $_.Custom } | Select-Object -First 1)
+    if ($automatic.Count -gt 0) { return $automatic[0] }
+    throw 'No Git identity is available. Configure git user.name/user.email or pass --git-name and --git-email.'
+}
+
+function script:Set-LnchRepositoryGitIdentity {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)]$Identity
+    )
+    & git -C $Directory config --local user.name ([string]$Identity.Name)
+    if ($LASTEXITCODE -ne 0) { throw "could not configure Git user.name for $Directory" }
+    & git -C $Directory config --local user.email ([string]$Identity.Email)
+    if ($LASTEXITCODE -ne 0) { throw "could not configure Git user.email for $Directory" }
+    Write-Host "Git identity: $($Identity.Name) <$($Identity.Email)> [$($Identity.Source)]"
 }
 
 function script:Get-LnchLatestReleaseTag {
@@ -603,6 +779,10 @@ $script:LnchCliValueOptions = @{
     '--default-agent' = @{ Parameter = 'SetDefaultAgent'; Error = '--default-agent requires a value (<name>|none)' }
     '-agent' = @{ Parameter = 'Agent'; Error = '--agent requires a value' }
     '--agent' = @{ Parameter = 'Agent'; Error = '--agent requires a value' }
+    '-git-name' = @{ Parameter = 'GitName'; Error = '--git-name requires a value' }
+    '--git-name' = @{ Parameter = 'GitName'; Error = '--git-name requires a value' }
+    '-git-email' = @{ Parameter = 'GitEmail'; Error = '--git-email requires a value' }
+    '--git-email' = @{ Parameter = 'GitEmail'; Error = '--git-email requires a value' }
 }
 
 function global:ConvertFrom-LnchCliArguments {
@@ -652,6 +832,8 @@ function global:lnch {
         [object]$LaunchBatch,
         [string]$ResolvedRoot,
         [string]$Agent,
+        [string]$GitName,
+        [string]$GitEmail,
         [string]$SetDefaultAgent,
         [switch]$Doctor,
         [switch]$Discover,
@@ -673,8 +855,11 @@ function global:lnch {
         [Nullable[int]]$AgentTermPort,
         [Nullable[int]]$ReadinessTimeoutMs,
         [switch]$Json,
-        [switch]$Version
+        [switch]$Version,
+        [ref]$ExitCode
     )
+    # Entry scripts request a status without mixing it into agent stdout.
+    if ($null -ne $ExitCode) { $ExitCode.Value = 0 }
     # PowerShell 5.1 treats GNU-style options as positional strings. Normalize
     # recognized long options through the same parser used by cmd/bash/zsh.
     $rawCliArguments = New-Object 'System.Collections.Generic.List[string]'
@@ -847,6 +1032,8 @@ function global:lnch {
         return
     }
 
+    # Named commands stay inline; picker and dashboard batches use managed tabs.
+    $defaultTerminalMode = if ([string]::IsNullOrWhiteSpace($Name) -or $null -ne $LaunchBatch) { 'tab' } else { 'inline' }
     if ([string]::IsNullOrWhiteSpace($Name)) {
         $selectedProjects = @(Select-LnchProjectSet -Root $rootFull)
         if ($selectedProjects.Count -eq 0) { return }
@@ -863,6 +1050,8 @@ function global:lnch {
             $batch = New-Object System.Collections.ArrayList
             foreach ($selectedProject in $selectedProjects) {
                 $invoke = @{ Name = $selectedProject; Here = [bool]$Here; LaunchBatch = $batch; ResolvedRoot = $rootFull }
+                $projectExitCode = 0
+                if ($null -ne $ExitCode) { $invoke.ExitCode = [ref]$projectExitCode }
                 if ($Agent) { $invoke.Agent = $Agent }
                 if ($forwardPrompt.Count -gt 0) { $invoke.Prompt = [string[]]$forwardPrompt }
                 foreach ($override in @(
@@ -879,6 +1068,7 @@ function global:lnch {
                 if ($null -ne $ReadinessTimeoutMs) { $invoke.ReadinessTimeoutMs = $ReadinessTimeoutMs }
                 if ($null -ne $AgentTermPort) { $invoke.AgentTermPort = $AgentTermPort }
                 & $startFn @invoke
+                if ($null -ne $ExitCode -and $projectExitCode -ne 0) { $ExitCode.Value = $projectExitCode }
             }
             $managedLaunches = 0
             if ($batch.Count -gt 0) {
@@ -890,7 +1080,9 @@ function global:lnch {
                         $managedLaunches++
                     } else {
                         Write-Warning "$($launchResult.Error); launching $($launchResult.Context.Name) inline"
-                        & $startFn -FromLauncher -LaunchId $launchResult.Context.LaunchId -RuntimeRoot $launchResult.Context.RuntimeRoot
+                        $projectExitCode = 0
+                        & $startFn -FromLauncher -LaunchId $launchResult.Context.LaunchId -RuntimeRoot $launchResult.Context.RuntimeRoot -ExitCode ([ref]$projectExitCode)
+                        if ($null -ne $ExitCode -and $projectExitCode -ne 0) { $ExitCode.Value = $projectExitCode }
                     }
                 }
             }
@@ -923,6 +1115,29 @@ function global:lnch {
             throw "launch directory mismatch: expected $expectedDirectory got $dir"
         }
         Write-LnchTerminalReceipt -Context $launcherContext -State child-started | Out-Null
+    }
+
+    $gitCommand = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if (-not $gitCommand) {
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage 'git not found in PATH' | Out-Null }
+        Write-Error 'git not found in PATH'
+        return
+    }
+    $needsGitInitialization = -not (Test-Path -LiteralPath (Join-Path $dir '.git'))
+    $gitIdentity = $null
+    if ($needsGitInitialization) {
+        try {
+            $gitIdentity = Resolve-LnchRepositoryGitIdentity -GitName $GitName -GitEmail $GitEmail
+        } catch {
+            $message = [string]$_.Exception.Message
+            if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage $message | Out-Null }
+            Write-Error $message
+            return
+        }
+        if (-not $gitIdentity) {
+            Write-Warning 'project creation cancelled: no Git identity selected'
+            return
+        }
     }
 
     $isNew = -not (Test-Path -LiteralPath $dir)
@@ -969,17 +1184,20 @@ function global:lnch {
         }
     }
 
-    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
-        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage 'git not found in PATH' | Out-Null }
-        Write-Error 'git not found in PATH'
-        return
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $dir '.git'))) {
-        git -C $dir init -b main
-        if ($LASTEXITCODE -ne 0) { git -C $dir init }   # pre-2.28 fallback
+    if ($needsGitInitialization) {
+        & $gitCommand.Source -C $dir init -b main
+        if ($LASTEXITCODE -ne 0) { & $gitCommand.Source -C $dir init }
         if ($LASTEXITCODE -ne 0) {
             if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage 'git init failed' | Out-Null }
             Write-Error 'git init failed'
+            return
+        }
+        try {
+            Set-LnchRepositoryGitIdentity -Directory $dir -Identity $gitIdentity
+        } catch {
+            $message = [string]$_.Exception.Message
+            if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage $message | Out-Null }
+            Write-Error $message
             return
         }
         Write-Host 'initialized git repo'
@@ -1028,10 +1246,10 @@ function global:lnch {
     Write-ProjectMeta -Dir $dir -Agent $agent -Intent $(if ($Prompt) { $Prompt -join ' ' } else { $null })
 
 
-    # default: hand off through the selected terminal adapter
+    # Explicit options and saved policy override the invocation's default mode.
     if (-not $FromLauncher) {
         $requestedMode = if ($Here -or $TerminalBackend -eq 'inline') { 'inline' } else { $TerminalMode }
-        $terminal = Get-LnchTerminalConfig -Mode $requestedMode -Backend $TerminalBackend -Window $TerminalWindow -ProfileName $TerminalProfile -TitleTemplate $TerminalTitle -TabColor $TabColor -ColorScheme $ColorScheme -AgentTermPath $AgentTermPath -AgentTermHome $AgentTermHome -AgentTermPort $AgentTermPort -ReadinessTimeoutMs $ReadinessTimeoutMs -Agent $agent
+        $terminal = Get-LnchTerminalConfig -Mode $requestedMode -DefaultMode $defaultTerminalMode -Backend $TerminalBackend -Window $TerminalWindow -ProfileName $TerminalProfile -TitleTemplate $TerminalTitle -TabColor $TabColor -ColorScheme $ColorScheme -AgentTermPath $AgentTermPath -AgentTermHome $AgentTermHome -AgentTermPort $AgentTermPort -ReadinessTimeoutMs $ReadinessTimeoutMs -Agent $agent
         if ($terminal.Mode -ne 'inline' -and $terminal.Backend -ne 'inline') {
             $verbPayload = @()
             foreach ($verbItem in $verbs) { $verbPayload += $verbItem }
@@ -1050,67 +1268,73 @@ function global:lnch {
                 return
             }
             Write-Warning "$($launchResult.Error); launching inline instead"
-            & ${function:lnch} -FromLauncher -LaunchId $context.LaunchId -RuntimeRoot $context.RuntimeRoot
+            & ${function:lnch} -FromLauncher -LaunchId $context.LaunchId -RuntimeRoot $context.RuntimeRoot -ExitCode $ExitCode
             return
         }
     }
 
-    Set-Location -LiteralPath $dir
-    # --- post-create hooks (fresh projects only) ---------------------------
-    if ($freshSession) {
-        foreach ($h in (Get-LnchPostCreateHook)) {
-            Write-Host "post-create hook: $h"
-            try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
-        }
-    }
-
-    # --- apply capabilities ------------------------------------------------
-    $p        = $script:AgentProfiles[$agent]
-    $resuming = -not $freshSession
-    $agentArgs = @()
-
-    $wantsPick = @($verbs | Where-Object { $_.Name -in @('pick', 'resume-pick') }).Count -gt 0
-    if ($resuming -and -not $wantsPick) {
-        $rcap = $p.Caps['resume']
-        if ($rcap) { $agentArgs += $rcap.Args }
-        elseif ($p.Caps.Count -gt 0) { Write-Warning "$agent declares no resume capability; starting a fresh session" }
-    }
-
-    foreach ($v in $verbs) {
-        $capKey = switch ($v.Name) {
-            'yolo'  { 'mode:yolo' }
-            'pick'  { 'resume-pick' }
-            default { $v.Name }
-        }
-        if ($capKey -in @('resume', 'resume-pick') -and -not $resuming) { continue }
-        $cap = $p.Caps[$capKey]
-        if (-not $cap) {
-            Write-Warning "$agent does not support :$($v.Name); skipping"
-            continue
-        }
-        $agentArgs += $cap.Args
-        if ($capKey -eq 'model') { $agentArgs += $v.Value }
-    }
-
-    if ($Prompt -and $resuming -and (-not $p.TakesPromptOnResume)) {
-        Write-Warning "dropping prompt ('$($Prompt -join ' ')): cannot combine with $agent resume"
-    } elseif ($Prompt) {
-        $agentArgs += ($Prompt -join ' ')
-    }
-
-    $verb = if ($resuming) { 'resuming' } else { 'starting' }
-    Write-Host ("{0} {1} with {2} {3}" -f $verb, (Split-Path -Path $dir -Leaf), $agent, ($agentArgs -join ' '))
-    if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-running | Out-Null }
-    $agentFailed = $false
+    $invokingLocation = Get-Location
     try {
-        & $agent @agentArgs
-        $agentExitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
-    } catch {
-        $agentFailed = $true
-        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage ([string]$_) | Out-Null }
-        throw
+        Set-Location -LiteralPath $dir
+        # --- post-create hooks (fresh projects only) ---------------------------
+        if ($freshSession) {
+            foreach ($h in (Get-LnchPostCreateHook)) {
+                Write-Host "post-create hook: $h"
+                try { Invoke-Expression $h | Out-Null } catch { Write-Warning "post-create hook failed: $_" }
+            }
+        }
+
+        # --- apply capabilities ------------------------------------------------
+        $p        = $script:AgentProfiles[$agent]
+        $resuming = -not $freshSession
+        $agentArgs = @()
+
+        $wantsPick = @($verbs | Where-Object { $_.Name -in @('pick', 'resume-pick') }).Count -gt 0
+        if ($resuming -and -not $wantsPick) {
+            $rcap = $p.Caps['resume']
+            if ($rcap) { $agentArgs += $rcap.Args }
+            elseif ($p.Caps.Count -gt 0) { Write-Warning "$agent declares no resume capability; starting a fresh session" }
+        }
+
+        foreach ($v in $verbs) {
+            $capKey = switch ($v.Name) {
+                'yolo'  { 'mode:yolo' }
+                'pick'  { 'resume-pick' }
+                default { $v.Name }
+            }
+            if ($capKey -in @('resume', 'resume-pick') -and -not $resuming) { continue }
+            $cap = $p.Caps[$capKey]
+            if (-not $cap) {
+                Write-Warning "$agent does not support :$($v.Name); skipping"
+                continue
+            }
+            $agentArgs += $cap.Args
+            if ($capKey -eq 'model') { $agentArgs += $v.Value }
+        }
+
+        if ($Prompt -and $resuming -and (-not $p.TakesPromptOnResume)) {
+            Write-Warning "dropping prompt ('$($Prompt -join ' ')): cannot combine with $agent resume"
+        } elseif ($Prompt) {
+            $agentArgs += ($Prompt -join ' ')
+        }
+
+        $verb = if ($resuming) { 'resuming' } else { 'starting' }
+        Write-Host ("{0} {1} with {2} {3}" -f $verb, (Split-Path -Path $dir -Leaf), $agent, ($agentArgs -join ' '))
+        if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-running | Out-Null }
+        $agentFailed = $false
+        try {
+            & $agent @agentArgs
+            $agentExitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+            if ($null -ne $ExitCode) { $ExitCode.Value = $agentExitCode }
+        } catch {
+            $agentFailed = $true
+            if ($launcherContext) { Write-LnchTerminalReceipt -Context $launcherContext -State failed -ErrorMessage ([string]$_) | Out-Null }
+            throw
+        } finally {
+            if ($launcherContext -and -not $agentFailed) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-exited -ExitCode $agentExitCode | Out-Null }
+        }
     } finally {
-        if ($launcherContext -and -not $agentFailed) { Write-LnchTerminalReceipt -Context $launcherContext -State agent-exited -ExitCode $agentExitCode | Out-Null }
+        Set-Location -LiteralPath $invokingLocation.Path
     }
 }
 

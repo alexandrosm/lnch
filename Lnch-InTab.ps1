@@ -3,4 +3,6 @@ param([Parameter(Mandatory)][string]$LaunchId, [Parameter(Mandatory)][string]$Ru
 $ErrorActionPreference = 'Stop'
 $env:LNCH_RUNTIME_DIR = [System.IO.Path]::GetFullPath($RuntimeRoot)
 . (Join-Path $PSScriptRoot 'Lnch.ps1')
-lnch -FromLauncher -LaunchId $LaunchId -RuntimeRoot $RuntimeRoot
+$exitCode = 0
+lnch -FromLauncher -LaunchId $LaunchId -RuntimeRoot $RuntimeRoot -ExitCode ([ref]$exitCode)
+exit $exitCode

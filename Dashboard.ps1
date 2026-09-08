@@ -215,6 +215,156 @@ function global:Get-LnchProjectDashboardSnapshot {
     }
 }
 
+function script:New-LnchDashboardSnapshotWorker {
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.Open()
+    $initializer = [System.Management.Automation.PowerShell]::Create()
+    try {
+        $initializer.Runspace = $runspace
+        $null = $initializer.AddScript({
+            param([string]$LnchRoot)
+            $ErrorActionPreference = 'Stop'
+            . (Join-Path $LnchRoot 'Lnch.ps1')
+        }).AddArgument($script:LnchRoot)
+        $null = $initializer.Invoke()
+        if ($initializer.HadErrors) {
+            throw (@($initializer.Streams.Error | ForEach-Object { [string]$_ }) -join '; ')
+        }
+    } catch {
+        try { $runspace.Close() } catch { }
+        $runspace.Dispose()
+        throw
+    } finally {
+        $initializer.Dispose()
+    }
+
+    [pscustomobject]@{
+        Runspace    = $runspace
+        PowerShell  = $null
+        AsyncResult = $null
+    }
+}
+
+function script:Start-LnchDashboardSnapshotRequest {
+    param(
+        [Parameter(Mandatory)]$Worker,
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$RefreshDisk
+    )
+    if ($Worker.PowerShell) { return $false }
+
+    $request = [System.Management.Automation.PowerShell]::Create()
+    try {
+        $request.Runspace = $Worker.Runspace
+        $null = $request.AddCommand('Get-LnchProjectDashboardSnapshot').AddParameter('Root', $Root)
+        if ($RefreshDisk) { $null = $request.AddParameter('RefreshDisk', $true) }
+        $Worker.PowerShell = $request
+        $Worker.AsyncResult = $request.BeginInvoke()
+        $true
+    } catch {
+        $request.Dispose()
+        $Worker.PowerShell = $null
+        $Worker.AsyncResult = $null
+        throw
+    }
+}
+
+function script:Receive-LnchDashboardSnapshotRequest {
+    param([Parameter(Mandatory)]$Worker)
+    if (-not $Worker.PowerShell -or -not $Worker.AsyncResult.IsCompleted) { return $null }
+
+    $request = $Worker.PowerShell
+    $asyncResult = $Worker.AsyncResult
+    $snapshot = $null
+    $errorMessage = $null
+    try {
+        $items = @($request.EndInvoke($asyncResult))
+        if ($request.HadErrors) {
+            $errorMessage = @($request.Streams.Error | ForEach-Object { [string]$_ }) -join '; '
+        } else {
+            $snapshot = $items | Where-Object { $_ -and $_.PSObject.Properties['Schema'] } | Select-Object -Last 1
+            if (-not $snapshot) { $errorMessage = 'telemetry refresh returned no snapshot' }
+        }
+    } catch {
+        $errorMessage = [string]$_
+    } finally {
+        $request.Dispose()
+        $Worker.PowerShell = $null
+        $Worker.AsyncResult = $null
+    }
+
+    [pscustomobject]@{
+        Snapshot = $snapshot
+        Error    = $errorMessage
+    }
+}
+
+function script:Close-LnchDashboardSnapshotWorker {
+    param($Worker)
+    if (-not $Worker) { return }
+    if ($Worker.PowerShell) {
+        try { $Worker.PowerShell.Stop() } catch { }
+        $Worker.PowerShell.Dispose()
+        $Worker.PowerShell = $null
+        $Worker.AsyncResult = $null
+    }
+    try { $Worker.Runspace.Close() } catch { }
+    $Worker.Runspace.Dispose()
+}
+
+function script:Start-LnchDashboardIdentityRequest {
+    $request = [System.Management.Automation.PowerShell]::Create()
+    try {
+        $null = $request.AddScript({
+            param([string]$LnchRoot)
+            $ErrorActionPreference = 'Stop'
+            . (Join-Path $LnchRoot 'Lnch.ps1')
+            Get-LnchGitIdentityCandidates
+        }).AddArgument($script:LnchRoot)
+        [pscustomobject]@{
+            PowerShell  = $request
+            AsyncResult = $request.BeginInvoke()
+        }
+    } catch {
+        $request.Dispose()
+        throw
+    }
+}
+
+function script:Receive-LnchDashboardIdentityRequest {
+    param([Parameter(Mandatory)]$Request)
+    if (-not $Request.AsyncResult.IsCompleted) { return $null }
+    $identities = @()
+    $errorMessage = $null
+    try {
+        $identities = @($Request.PowerShell.EndInvoke($Request.AsyncResult) | Where-Object {
+            $_ -and $_.PSObject.Properties['Id']
+        })
+        if ($Request.PowerShell.HadErrors) {
+            $errorMessage = @($Request.PowerShell.Streams.Error | ForEach-Object { [string]$_ }) -join '; '
+        } elseif ($identities.Count -eq 0) {
+            $errorMessage = 'identity discovery returned no options'
+        }
+    } catch {
+        $errorMessage = [string]$_
+    } finally {
+        $Request.PowerShell.Dispose()
+    }
+    [pscustomobject]@{
+        Identities = $identities
+        Error      = $errorMessage
+    }
+}
+
+function script:Close-LnchDashboardIdentityRequest {
+    param($Request)
+    if (-not $Request -or -not $Request.PowerShell) { return }
+    if (-not $Request.AsyncResult.IsCompleted) {
+        try { $Request.PowerShell.Stop() } catch { }
+    }
+    $Request.PowerShell.Dispose()
+}
+
 function script:Format-LnchDashboardBytes {
     param([Nullable[long]]$Bytes)
     if ($null -eq $Bytes) { return '--' }
@@ -271,8 +421,226 @@ function script:Get-LnchDashboardSortRank {
     }
 }
 
+function script:Get-LnchDashboardOrderedProjects {
+    param([Parameter(Mandatory)]$Snapshot)
+    @($Snapshot.Projects | Sort-Object @{ Expression = { Get-LnchDashboardSortRank $_.State } }, Name)
+}
+
+function script:Get-LnchDashboardAvailableAgents {
+    $agents = @($script:AgentProfiles.Keys | Where-Object {
+        @(Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue).Count -gt 0
+    } | Sort-Object)
+    if ($agents.Count -eq 0) { return @('omp') }
+    $agents
+}
+
+function script:New-LnchDashboardCreateState {
+    param([object[]]$IdentityCandidates)
+    $agents = @(Get-LnchDashboardAvailableAgents)
+    $identities = if ($IdentityCandidates -and $IdentityCandidates.Count -gt 0) {
+        @($IdentityCandidates)
+    } else {
+        @(Get-LnchGitIdentityCandidates)
+    }
+    $agentIndex = 0
+    $defaultAgent = $null
+    try { $defaultAgent = Get-LnchDefaultAgent } catch { }
+    if ($defaultAgent) {
+        for ($index = 0; $index -lt $agents.Count; $index++) {
+            if ($agents[$index] -eq $defaultAgent) {
+                $agentIndex = $index
+                break
+            }
+        }
+    }
+    [pscustomobject]@{
+        Name                = ''
+        Agents              = $agents
+        AgentIndex          = $agentIndex
+        Identities          = $identities
+        IdentityIndex       = 0
+        CustomName          = ''
+        CustomEmail         = ''
+        Focus               = 0
+        Error               = $null
+    }
+}
+
+function script:Get-LnchDashboardCreateAgent {
+    param([Parameter(Mandatory)]$CreateState)
+    $agents = @($CreateState.Agents)
+    if ($agents.Count -eq 0) { return 'omp' }
+    $index = [Math]::Max(0, [Math]::Min([int]$CreateState.AgentIndex, $agents.Count - 1))
+    [string]$agents[$index]
+}
+
+function script:Get-LnchDashboardCreateIdentity {
+    param([Parameter(Mandatory)]$CreateState)
+    $identities = @($CreateState.Identities)
+    if ($identities.Count -eq 0) {
+        return Resolve-LnchGitIdentityValues -Name $CreateState.CustomName -Email $CreateState.CustomEmail -Source custom
+    }
+    $index = [Math]::Max(0, [Math]::Min([int]$CreateState.IdentityIndex, $identities.Count - 1))
+    $selected = $identities[$index]
+    if ($selected.Custom) {
+        return Resolve-LnchGitIdentityValues -Name $CreateState.CustomName -Email $CreateState.CustomEmail -Source custom
+    }
+    $selected
+}
+
+function script:Get-LnchDashboardCreateFocusCount {
+    param([Parameter(Mandatory)]$CreateState)
+    $identity = Get-LnchDashboardCreateIdentity -CreateState $CreateState
+    if ($identity.Custom) { return 5 }
+    3
+}
+
+function script:Resolve-LnchDashboardProjectName {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyString()][string]$Name
+    )
+    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    $value = if ($null -eq $Name) { '' } else { $Name.Trim() }
+    $errorMessage = $null
+    $directory = $null
+
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $errorMessage = 'Enter a project name.'
+    } elseif ([System.IO.Path]::IsPathRooted($value) -or $value.IndexOfAny([char[]]'\/') -ge 0) {
+        $errorMessage = 'Use one folder name under the projects root.'
+    } elseif ($value.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        $errorMessage = 'The project name contains an invalid filename character.'
+    } else {
+        try {
+            $directory = [System.IO.Path]::GetFullPath((Join-Path $rootFull $value))
+            $prefix = $rootFull.TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
+            if (-not $directory.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $errorMessage = 'The project name escapes the projects root.'
+            } elseif (Test-Path -LiteralPath $directory) {
+                $errorMessage = "Project '$value' already exists."
+            }
+        } catch {
+            $errorMessage = [string]$_.Exception.Message
+        }
+    }
+
+    [pscustomobject]@{
+        Valid     = [string]::IsNullOrWhiteSpace($errorMessage)
+        Name      = $value
+        Directory = $directory
+        Error     = $errorMessage
+    }
+}
+
+function global:Invoke-LnchDashboardProjectLaunch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Agent,
+        [Parameter(Mandatory)][string]$GitName,
+        [Parameter(Mandatory)][string]$GitEmail
+    )
+    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name
+    if (-not $resolved.Valid) { throw $resolved.Error }
+
+    $terminal = Get-LnchTerminalConfig -Agent $Agent
+    if ($terminal.Mode -eq 'inline' -or $terminal.Backend -eq 'inline') {
+        throw 'Starting a project from the dashboard requires a managed terminal backend.'
+    }
+
+    $batch = New-Object System.Collections.ArrayList
+    $invoke = @{
+        Name               = $resolved.Name
+        Agent              = $Agent
+        GitName            = $GitName
+        GitEmail           = $GitEmail
+        ResolvedRoot       = [System.IO.Path]::GetFullPath($Root)
+        NoDashboard        = $true
+        LaunchBatch        = $batch
+        TerminalMode       = $terminal.Mode
+        TerminalBackend    = $terminal.Backend
+        TerminalWindow     = $terminal.Window
+        TerminalProfile    = $terminal.Profile
+        TerminalTitle      = $terminal.TitleTemplate
+        TabColor           = $terminal.TabColor
+        ColorScheme        = $terminal.ColorScheme
+        AgentTermPath      = $terminal.AgentTermPath
+        AgentTermHome      = $terminal.AgentTermHome
+        AgentTermPort      = $terminal.AgentTermPort
+        ReadinessTimeoutMs = $terminal.ReadinessTimeoutMs
+    }
+    $startFunction = ${function:lnch}
+    $messages = @(& $startFunction @invoke *>&1)
+    if ($batch.Count -ne 1) {
+        $detail = @($messages | ForEach-Object { [string]$_ } | Where-Object { $_ }) -join '; '
+        if (-not $detail) { $detail = 'project launch did not produce a terminal request' }
+        throw $detail
+    }
+
+    $launchResult = @(Invoke-LnchTerminal -Contexts $batch.ToArray())[0]
+    if (-not $launchResult.Accepted) { throw $launchResult.Error }
+    [pscustomobject]@{
+        Name     = $resolved.Name
+        Agent    = $Agent
+        Accepted = $true
+        Ready    = [bool]$launchResult.Ready
+        LaunchId = [string]$launchResult.Context.LaunchId
+    }
+}
+
+function script:Start-LnchDashboardProjectProcess {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Agent,
+        [Parameter(Mandatory)][string]$GitName,
+        [Parameter(Mandatory)][string]$GitEmail
+    )
+    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name
+    if (-not $resolved.Valid) { throw $resolved.Error }
+
+    $shell = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+    $identity = Resolve-LnchGitIdentityValues -Name $GitName -Email $GitEmail -Source custom
+    if (-not $identity.Valid) { throw $identity.Error }
+
+    $shellExecutable = if ($shell) { $shell.Source } else { Join-Path $PSHOME 'powershell.exe' }
+    $lnchScript = Join-Path $script:LnchRoot 'Lnch.ps1'
+    $command = @(
+        '$ErrorActionPreference = ''Stop'''
+        ('. {0}' -f (ConvertTo-LnchPowerShellLiteral $lnchScript))
+        ('Invoke-LnchDashboardProjectLaunch -Root {0} -Name {1} -Agent {2} -GitName {3} -GitEmail {4} | Out-Null' -f @(
+            (ConvertTo-LnchPowerShellLiteral ([System.IO.Path]::GetFullPath($Root))),
+            (ConvertTo-LnchPowerShellLiteral $resolved.Name),
+            (ConvertTo-LnchPowerShellLiteral $Agent),
+            (ConvertTo-LnchPowerShellLiteral $identity.Name),
+            (ConvertTo-LnchPowerShellLiteral $identity.Email)
+        ))
+    ) -join [Environment]::NewLine
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $process = Start-Process -FilePath $shellExecutable -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand" -WorkingDirectory $script:LnchRoot -WindowStyle Hidden -PassThru
+    [pscustomobject]@{
+        Name      = $resolved.Name
+        Agent     = $Agent
+        GitName   = $identity.Name
+        GitEmail  = $identity.Email
+        Process   = $process
+        StartedAt = [datetime]::UtcNow
+    }
+}
+
 function script:Get-LnchDashboardFrame {
-    param([Parameter(Mandatory)]$Snapshot, [int]$Width = 120, [int]$Height = 30, [int]$SelectedIndex = 0, [switch]$Color)
+    param(
+        [Parameter(Mandatory)]$Snapshot,
+        [int]$Width = 120,
+        [int]$Height = 30,
+        [int]$SelectedIndex = 0,
+        [switch]$Color,
+        [object]$CreateState,
+        [string]$Notice,
+        [switch]$Loading
+    )
     $width = [Math]::Max(60, $Width)
     $height = [Math]::Max(16, $Height)
     $esc = [char]27
@@ -306,7 +674,7 @@ function script:Get-LnchDashboardFrame {
     $summaryCell = (Limit-LnchDashboardText $summaryText $innerWidth).PadRight($innerWidth)
     $rootCell = (Limit-LnchDashboardText $rootText $innerWidth).PadRight($innerWidth)
 
-    $ordered = @($Snapshot.Projects | Sort-Object @{ Expression = { Get-LnchDashboardSortRank $_.State } }, Name)
+    $ordered = @(Get-LnchDashboardOrderedProjects -Snapshot $Snapshot)
     if ($ordered.Count -eq 0) { $SelectedIndex = 0 }
     elseif ($SelectedIndex -lt 0) { $SelectedIndex = $ordered.Count - 1 }
     elseif ($SelectedIndex -ge $ordered.Count) { $SelectedIndex = 0 }
@@ -334,8 +702,12 @@ function script:Get-LnchDashboardFrame {
     $lines.Add("$cyan$bold$headerRow$reset") | Out-Null
     $lines.Add("$blue$($horizontal * [Math]::Min($width, $headerRow.Length))$reset") | Out-Null
 
-    $detailsLines = 6
-    $visibleRows = [Math]::Max(1, $height - 16)
+    $detailsLines = if ($CreateState) { 9 } else { 6 }
+    $visibleRows = if ($CreateState) {
+        [Math]::Max(0, $height - (10 + $detailsLines))
+    } else {
+        [Math]::Max(1, $height - (10 + $detailsLines))
+    }
     $offset = 0
     if ($ordered.Count -gt $visibleRows) {
         $offset = [Math]::Max(0, [Math]::Min($SelectedIndex - [Math]::Floor($visibleRows / 2), $ordered.Count - $visibleRows))
@@ -343,8 +715,10 @@ function script:Get-LnchDashboardFrame {
     $lastIndex = [Math]::Min($ordered.Count - 1, $offset + $visibleRows - 1)
 
     if ($ordered.Count -eq 0) {
-        $emptyText = 'No projects found under this root.'
-        $lines.Add("$gray$(' ' + $emptyText)$reset") | Out-Null
+        if ($visibleRows -gt 0) {
+            $emptyText = if ($Loading) { 'Loading project telemetry...' } else { 'No projects found under this root. Press N to create one.' }
+            $lines.Add("$gray$(' ' + $emptyText)$reset") | Out-Null
+        }
     } else {
         for ($index = $offset; $index -le $lastIndex; $index++) {
             $project = $ordered[$index]
@@ -376,7 +750,39 @@ function script:Get-LnchDashboardFrame {
     }
 
     while ($lines.Count -lt $height - $detailsLines) { $lines.Add('') | Out-Null }
-    if ($ordered.Count -gt 0) {
+    if ($CreateState) {
+        $createAgent = Get-LnchDashboardCreateAgent -CreateState $CreateState
+        $createIdentity = Get-LnchDashboardCreateIdentity -CreateState $CreateState
+        $identityOptions = @($CreateState.Identities)
+        $identityIndex = [Math]::Max(0, [Math]::Min([int]$CreateState.IdentityIndex, $identityOptions.Count - 1))
+        $selectedIdentity = if ($identityOptions.Count -gt 0) { $identityOptions[$identityIndex] } else { $createIdentity }
+        $identityLabel = if ($selectedIdentity.Custom) { 'Custom name and email' } else { [string]$selectedIdentity.Label }
+        $gitName = if ($selectedIdentity.Custom) { [string]$CreateState.CustomName } else { [string]$createIdentity.Name }
+        $gitEmail = if ($selectedIdentity.Custom) { [string]$CreateState.CustomEmail } else { [string]$createIdentity.Email }
+        $focus = [int]$CreateState.Focus
+        $cursor = [char]0x2588
+        $detailTitle = ' NEW PROJECT '
+        $detailTop = $topLeft + $horizontal + $detailTitle + ($horizontal * [Math]::Max(0, $width - $detailTitle.Length - 3)) + $topRight
+        $detailBottom = $bottomLeft + ($horizontal * ($width - 2)) + $bottomRight
+        $nameMark = if ($focus -eq 0) { '>' } else { ' ' }
+        $agentMark = if ($focus -eq 1) { '>' } else { ' ' }
+        $identityMark = if ($focus -eq 2) { '>' } else { ' ' }
+        $gitNameMark = if ($focus -eq 3) { '>' } else { ' ' }
+        $gitEmailMark = if ($focus -eq 4) { '>' } else { ' ' }
+        $detailOne = " $nameMark NAME      $($CreateState.Name)$(if ($focus -eq 0) { $cursor })"
+        $detailTwo = " $agentMark AGENT     $createAgent"
+        $detailThree = " $identityMark IDENTITY  $identityLabel"
+        $detailFour = " $gitNameMark GIT NAME  $gitName$(if ($focus -eq 3) { $cursor })"
+        $detailFive = " $gitEmailMark GIT EMAIL $gitEmail$(if ($focus -eq 4) { $cursor })"
+        $detailSix = if ($CreateState.Error) { " ERROR  $($CreateState.Error)" } else { ' TAB move   LEFT/RIGHT choose   ENTER start   ESC cancel' }
+        $lines.Add("$blue$detailTop$reset") | Out-Null
+        foreach ($detail in @($detailOne, $detailTwo, $detailThree, $detailFour, $detailFive, $detailSix)) {
+            $cell = (Limit-LnchDashboardText $detail $innerWidth).PadRight($innerWidth)
+            $detailColor = if ($CreateState.Error -and $detail -eq $detailSix) { $red } elseif ($detail.StartsWith(' >')) { $white } else { $dim }
+            $lines.Add("$blue$vertical$reset $detailColor$cell$reset $blue$vertical$reset") | Out-Null
+        }
+        $lines.Add("$blue$detailBottom$reset") | Out-Null
+    } elseif ($ordered.Count -gt 0) {
         $selected = $ordered[$SelectedIndex]
         $detailTitle = " PROJECT  $($selected.Name) "
         $detailTop = $topLeft + $horizontal + $detailTitle + ($horizontal * [Math]::Max(0, $width - $detailTitle.Length - 3)) + $topRight
@@ -393,7 +799,13 @@ function script:Get-LnchDashboardFrame {
         $lines.Add("$blue$detailBottom$reset") | Out-Null
     }
     $generated = try { ([datetime]$Snapshot.GeneratedAt).ToLocalTime().ToString('HH:mm:ss') } catch { '--:--:--' }
-    $footer = " UP/DOWN select   R measure disk + refresh   Q quit                           updated $generated "
+    if ($CreateState) {
+        $footer = ' TYPE text   TAB/UP/DOWN move   LEFT/RIGHT choose   ENTER start   ESC cancel '
+    } elseif ($Notice) {
+        $footer = " $Notice   N new project   Q quit   updated $generated "
+    } else {
+        $footer = " UP/DOWN select   N new project   R measure disk   Q quit   updated $generated "
+    }
     $lines.Add("$cyan$bold$(Limit-LnchDashboardText $footer $width)$reset") | Out-Null
     $lines -join [Environment]::NewLine
 }
@@ -422,54 +834,332 @@ function global:Show-LnchDashboard {
 
     $esc = [char]27
     $selectedIndex = 0
-    $forceRefresh = $true
-    $refreshDisk = $false
+    $createState = $null
+    $projectLaunch = $null
+    $notice = $null
+    $noticeUntil = [datetime]::MinValue
+    $loading = $true
+    $renderPending = $true
+    $refreshDiskQueued = $false
+    $refreshDiskActive = $false
     $nextRefresh = [datetime]::MinValue
+    $lastWidth = 0
+    $lastHeight = 0
+    $worker = $null
+    $identityRequest = $null
+    $identityCandidates = $null
+    $createPending = $false
+    $snapshot = [pscustomobject][ordered]@{
+        Schema      = 1
+        GeneratedAt = [datetime]::UtcNow.ToString('o')
+        Root        = $rootFull
+        Summary     = [pscustomobject][ordered]@{
+            ProjectCount = 0; ActiveProjects = 0; ActiveSessions = 0; ProcessCount = 0
+            CpuPercent = 0; WorkingSetBytes = 0; DiskBytes = $null; Cost = $null; CostKind = 'unknown'
+        }
+        Projects    = @()
+    }
+
+    try {
+        $worker = New-LnchDashboardSnapshotWorker
+        $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull
+        $nextRefresh = [datetime]::MaxValue
+    } catch {
+        $worker = $null
+        $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull
+        $loading = $false
+        $notice = 'Background telemetry unavailable; using synchronous refresh.'
+        $noticeUntil = [datetime]::UtcNow.AddSeconds(5)
+        $nextRefresh = [datetime]::UtcNow.AddMilliseconds($RefreshMilliseconds)
+    }
+
+    try {
+        $identityRequest = Start-LnchDashboardIdentityRequest
+    } catch {
+        $identityCandidates = @(Get-LnchGitIdentityCandidates)
+    }
+
     $originalTitle = $null
     try { $originalTitle = [Console]::Title; [Console]::Title = 'lnch top' } catch { }
     [Console]::Write("$esc[?1049h$esc[?25l")
     try {
         while ($true) {
-            if ($forceRefresh -or [datetime]::UtcNow -ge $nextRefresh) {
-                $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -RefreshDisk:$refreshDisk
-                $projectCount = @($snapshot.Projects).Count
-                if ($projectCount -eq 0) { $selectedIndex = 0 }
-                elseif ($selectedIndex -ge $projectCount) { $selectedIndex = 0 }
-                $windowWidth = 120
-                $windowHeight = 30
+            $now = [datetime]::UtcNow
+
+            if ($projectLaunch) {
                 try {
-                    $windowWidth = $Host.UI.RawUI.WindowSize.Width
-                    $windowHeight = $Host.UI.RawUI.WindowSize.Height
-                } catch { }
-                $frame = Get-LnchDashboardFrame -Snapshot $snapshot -Width $windowWidth -Height $windowHeight -SelectedIndex $selectedIndex -Color
-                [Console]::Write("$esc[2J$esc[H$frame")
-                $nextRefresh = [datetime]::UtcNow.AddMilliseconds($RefreshMilliseconds)
-                $forceRefresh = $false
-                $refreshDisk = $false
+                    if ($projectLaunch.Process.HasExited) {
+                        $exitCode = [int]$projectLaunch.Process.ExitCode
+                        if ($exitCode -eq 0) {
+                            $notice = "Started $($projectLaunch.Name) with $($projectLaunch.Agent) as $($projectLaunch.GitName)."
+                        } else {
+                            $notice = "Failed to start $($projectLaunch.Name) (exit $exitCode)."
+                        }
+                        $noticeUntil = $now.AddSeconds(5)
+                        $projectLaunch.Process.Dispose()
+                        $projectLaunch = $null
+                        $nextRefresh = [datetime]::MinValue
+                        $renderPending = $true
+                    }
+                } catch {
+                    $notice = "Project launch status failed: $($_.Exception.Message)"
+                    $noticeUntil = $now.AddSeconds(5)
+                    try { $projectLaunch.Process.Dispose() } catch { }
+                    $projectLaunch = $null
+                    $renderPending = $true
+                }
+            } elseif ($notice -and $noticeUntil -ne [datetime]::MaxValue -and $now -ge $noticeUntil) {
+                $notice = $null
+                $renderPending = $true
             }
 
-            if ([Console]::KeyAvailable) {
+            if ($identityRequest) {
+                $identityResult = Receive-LnchDashboardIdentityRequest -Request $identityRequest
+                if ($identityResult) {
+                    $identityRequest = $null
+                    if ($identityResult.Identities.Count -gt 0) {
+                        $identityCandidates = @($identityResult.Identities)
+                        if ($identityResult.Error) {
+                            $notice = 'Some automatic Git identity sources were unavailable.'
+                            $noticeUntil = $now.AddSeconds(5)
+                        }
+                    } else {
+                        $identityCandidates = @([pscustomobject]@{
+                            Id = 'custom'; Valid = $true; Name = ''; Email = ''; Source = 'custom'
+                            Label = 'Custom name and email'; Custom = $true; Error = $null
+                        })
+                        $notice = 'Automatic Git identity discovery failed; custom identity remains available.'
+                        $noticeUntil = $now.AddSeconds(5)
+                    }
+                    if ($createPending) {
+                        $createState = New-LnchDashboardCreateState -IdentityCandidates $identityCandidates
+                        $createPending = $false
+                        if (-not $identityResult.Error) {
+                            $notice = $null
+                            $noticeUntil = [datetime]::MinValue
+                        }
+                    }
+                    $renderPending = $true
+                }
+            }
+
+            if ($worker) {
+                $refreshResult = Receive-LnchDashboardSnapshotRequest -Worker $worker
+                if ($refreshResult) {
+                    if ($refreshResult.Snapshot) {
+                        $selectedName = $null
+                        $previousProjects = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot)
+                        if ($previousProjects.Count -gt 0 -and $selectedIndex -lt $previousProjects.Count) {
+                            $selectedName = [string]$previousProjects[$selectedIndex].Name
+                        }
+                        $snapshot = $refreshResult.Snapshot
+                        $loading = $false
+                        $updatedProjects = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot)
+                        $selectedIndex = 0
+                        if ($selectedName) {
+                            for ($index = 0; $index -lt $updatedProjects.Count; $index++) {
+                                if ($updatedProjects[$index].Name -eq $selectedName) {
+                                    $selectedIndex = $index
+                                    break
+                                }
+                            }
+                        }
+                        if ($refreshDiskActive) {
+                            $notice = 'Disk usage refreshed.'
+                            $noticeUntil = $now.AddSeconds(3)
+                        }
+                    } else {
+                        $notice = "Telemetry refresh failed: $($refreshResult.Error)"
+                        $noticeUntil = $now.AddSeconds(5)
+                    }
+                    $refreshDiskActive = $false
+                    $nextRefresh = $now.AddMilliseconds($RefreshMilliseconds)
+                    $renderPending = $true
+                }
+
+                if (-not $worker.PowerShell -and ($refreshDiskQueued -or $now -ge $nextRefresh)) {
+                    $refreshDiskActive = $refreshDiskQueued
+                    $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull -RefreshDisk:$refreshDiskActive
+                    $refreshDiskQueued = $false
+                    $nextRefresh = [datetime]::MaxValue
+                    if ($refreshDiskActive) {
+                        $notice = 'Measuring project disk usage...'
+                        $noticeUntil = [datetime]::MaxValue
+                        $renderPending = $true
+                    }
+                }
+            } elseif ($now -ge $nextRefresh) {
+                $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -RefreshDisk:$refreshDiskQueued
+                $loading = $false
+                $refreshDiskQueued = $false
+                $nextRefresh = $now.AddMilliseconds($RefreshMilliseconds)
+                $projectCount = @($snapshot.Projects).Count
+                if ($projectCount -eq 0 -or $selectedIndex -ge $projectCount) { $selectedIndex = 0 }
+                $renderPending = $true
+            }
+
+            while ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true)
+                if ($createState) {
+                    $agentCount = @($createState.Agents).Count
+                    $identityCount = @($createState.Identities).Count
+                    switch ($key.Key) {
+                        'Escape' {
+                            $createState = $null
+                        }
+                        'Enter' {
+                            $resolved = Resolve-LnchDashboardProjectName -Root $rootFull -Name $createState.Name
+                            $createIdentity = Get-LnchDashboardCreateIdentity -CreateState $createState
+                            if (-not $resolved.Valid) {
+                                $createState.Error = $resolved.Error
+                            } elseif (-not $createIdentity.Valid) {
+                                $createState.Error = $createIdentity.Error
+                            } else {
+                                $createAgent = Get-LnchDashboardCreateAgent -CreateState $createState
+                                try {
+                                    $projectLaunch = Start-LnchDashboardProjectProcess -Root $rootFull -Name $resolved.Name -Agent $createAgent -GitName $createIdentity.Name -GitEmail $createIdentity.Email
+                                    $notice = "Starting $($resolved.Name) with $createAgent as $($createIdentity.Name) <$($createIdentity.Email)>..."
+                                    $noticeUntil = [datetime]::MaxValue
+                                    $createState = $null
+                                    $nextRefresh = [datetime]::MinValue
+                                } catch {
+                                    $createState.Error = [string]$_.Exception.Message
+                                }
+                            }
+                        }
+                        'Tab' {
+                            $focusCount = Get-LnchDashboardCreateFocusCount -CreateState $createState
+                            $delta = if (($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0) { -1 } else { 1 }
+                            $createState.Focus = ([int]$createState.Focus + $delta + $focusCount) % $focusCount
+                            $createState.Error = $null
+                        }
+                        'UpArrow' {
+                            $focusCount = Get-LnchDashboardCreateFocusCount -CreateState $createState
+                            $createState.Focus = ([int]$createState.Focus - 1 + $focusCount) % $focusCount
+                            $createState.Error = $null
+                        }
+                        'DownArrow' {
+                            $focusCount = Get-LnchDashboardCreateFocusCount -CreateState $createState
+                            $createState.Focus = ([int]$createState.Focus + 1) % $focusCount
+                            $createState.Error = $null
+                        }
+                        'LeftArrow' {
+                            if ([int]$createState.Focus -eq 1 -and $agentCount -gt 0) {
+                                $createState.AgentIndex = ([int]$createState.AgentIndex - 1 + $agentCount) % $agentCount
+                            } elseif ([int]$createState.Focus -eq 2 -and $identityCount -gt 0) {
+                                $createState.IdentityIndex = ([int]$createState.IdentityIndex - 1 + $identityCount) % $identityCount
+                            }
+                            $createState.Error = $null
+                        }
+                        'RightArrow' {
+                            if ([int]$createState.Focus -eq 1 -and $agentCount -gt 0) {
+                                $createState.AgentIndex = ([int]$createState.AgentIndex + 1) % $agentCount
+                            } elseif ([int]$createState.Focus -eq 2 -and $identityCount -gt 0) {
+                                $createState.IdentityIndex = ([int]$createState.IdentityIndex + 1) % $identityCount
+                            }
+                            $createState.Error = $null
+                        }
+                        'Backspace' {
+                            switch ([int]$createState.Focus) {
+                                0 {
+                                    if ($createState.Name.Length -gt 0) {
+                                        $createState.Name = $createState.Name.Substring(0, $createState.Name.Length - 1)
+                                    }
+                                }
+                                3 {
+                                    if ($createState.CustomName.Length -gt 0) {
+                                        $createState.CustomName = $createState.CustomName.Substring(0, $createState.CustomName.Length - 1)
+                                    }
+                                }
+                                4 {
+                                    if ($createState.CustomEmail.Length -gt 0) {
+                                        $createState.CustomEmail = $createState.CustomEmail.Substring(0, $createState.CustomEmail.Length - 1)
+                                    }
+                                }
+                            }
+                            $createState.Error = $null
+                        }
+                        default {
+                            $focus = [int]$createState.Focus
+                            if ($key.Key -eq 'U' -and ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0) {
+                                if ($focus -eq 0) { $createState.Name = '' }
+                                elseif ($focus -eq 3) { $createState.CustomName = '' }
+                                elseif ($focus -eq 4) { $createState.CustomEmail = '' }
+                                $createState.Error = $null
+                            } elseif (-not [char]::IsControl($key.KeyChar)) {
+                                if ($focus -eq 0 -and $createState.Name.Length -lt 120) {
+                                    $createState.Name += $key.KeyChar
+                                } elseif ($focus -eq 3 -and $createState.CustomName.Length -lt 120) {
+                                    $createState.CustomName += $key.KeyChar
+                                } elseif ($focus -eq 4 -and $createState.CustomEmail.Length -lt 254) {
+                                    $createState.CustomEmail += $key.KeyChar
+                                }
+                                $createState.Error = $null
+                            }
+                        }
+                    }
+                    $renderPending = $true
+                    continue
+                }
+
                 switch ($key.Key) {
                     'Q' { return }
                     'Escape' { return }
                     'UpArrow' {
+                        $projectCount = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot).Count
                         $selectedIndex--
-                        if ($selectedIndex -lt 0) { $selectedIndex = [Math]::Max(0, @($snapshot.Projects).Count - 1) }
-                        $forceRefresh = $true
+                        if ($selectedIndex -lt 0) { $selectedIndex = [Math]::Max(0, $projectCount - 1) }
+                        $renderPending = $true
                     }
                     'DownArrow' {
+                        $projectCount = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot).Count
                         $selectedIndex++
-                        if ($selectedIndex -ge @($snapshot.Projects).Count) { $selectedIndex = 0 }
-                        $forceRefresh = $true
+                        if ($selectedIndex -ge $projectCount) { $selectedIndex = 0 }
+                        $renderPending = $true
                     }
-                    'R' { $refreshDisk = $true; $forceRefresh = $true }
+                    'N' {
+                        if ($projectLaunch) {
+                            $notice = 'Wait for the current project launch to finish.'
+                            $noticeUntil = [datetime]::UtcNow.AddSeconds(3)
+                        } elseif ($identityCandidates) {
+                            $createState = New-LnchDashboardCreateState -IdentityCandidates $identityCandidates
+                        } else {
+                            $createPending = $true
+                            $notice = 'Loading Git identity options...'
+                            $noticeUntil = [datetime]::MaxValue
+                        }
+                        $renderPending = $true
+                    }
+                    'R' {
+                        $refreshDiskQueued = $true
+                        $nextRefresh = [datetime]::MinValue
+                    }
                 }
             }
-            Start-Sleep -Milliseconds 50
+
+            $windowWidth = 120
+            $windowHeight = 30
+            try {
+                $windowWidth = $Host.UI.RawUI.WindowSize.Width
+                $windowHeight = $Host.UI.RawUI.WindowSize.Height
+            } catch { }
+            if ($windowWidth -ne $lastWidth -or $windowHeight -ne $lastHeight) {
+                $lastWidth = $windowWidth
+                $lastHeight = $windowHeight
+                $renderPending = $true
+            }
+            if ($renderPending) {
+                $frame = Get-LnchDashboardFrame -Snapshot $snapshot -Width $windowWidth -Height $windowHeight -SelectedIndex $selectedIndex -Color -CreateState $createState -Notice $notice -Loading:$loading
+                [Console]::Write("$esc[H$frame$esc[J")
+                $renderPending = $false
+            }
+            [System.Threading.Thread]::Sleep(15)
         }
     } finally {
         [Console]::Write("$esc[0m$esc[?25h$esc[?1049l")
+        if ($projectLaunch) { try { $projectLaunch.Process.Dispose() } catch { } }
+        Close-LnchDashboardSnapshotWorker -Worker $worker
+        Close-LnchDashboardIdentityRequest -Request $identityRequest
         if ($null -ne $originalTitle) { try { [Console]::Title = $originalTitle } catch { } }
     }
 }

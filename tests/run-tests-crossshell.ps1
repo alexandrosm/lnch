@@ -41,8 +41,12 @@ New-Item -ItemType Directory -Force -Path $proj | Out-Null
 # redirected user-config: deterministic omp default across all fresh cases
 $env:LNCH_CONFIG_DIR = Join-Path ([IO.Path]::GetTempPath()) ('ps-shim-cfg-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $env:LNCH_CONFIG_DIR | Out-Null
-@{ defaultAgent = 'omp'; terminal = @{ readinessTimeoutMs = 0 } } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
+@{
+    defaultAgent = 'omp'
+    gitIdentity = @{ name = 'Lnch Cross-Shell Test'; email = 'lnch-cross-shell@example.invalid' }
+    terminal = @{ readinessTimeoutMs = 0 }
+} | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
 
 # agents.json fixture: back up a real one, install ours, restore afterwards
 $registryPath = Join-Path $LnchRoot 'agents.json'
@@ -98,14 +102,15 @@ function AutoRunValue {
 
 try {
     Write-Host '=== A: fresh, prompt, metadata ==='
-    $out = BashRun 'lnch alpha hello world --here'
+    $out = BashRun 'lnch alpha hello world'
     Check A-prompt ($out -match '\[omp-stub\] args="hello world"') $out
+    Check A-no-tab (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
     Check A-git    (Test-Path (Join-Path $proj 'alpha\.git'))
     $m = Meta 'alpha'
     Check A-meta   (($m -match '"agent"') -and ($m -match 'hello world'))
 
     Write-Host '=== B: resume omp -c ==='
-    $out = BashRun 'lnch alpha --here'
+    $out = BashRun 'lnch alpha'
     Check B-resume ($out -match '\[omp-stub\] args=-c\b')
 
     Write-Host '=== C: claude fingerprint ==='
@@ -168,8 +173,10 @@ try {
     $chk = AutoRunValue
     Check CMD-autorun-installed (($null -ne $chk) -and ($chk -match 'lnch'))
     $cli = Join-Path $LnchRoot 'shell\lnch-cli.cmd'
-    $out = CmdRun ('"' + $cli + '" delta hi there --here')
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force
+    $out = CmdRun ('"' + $cli + '" delta hi there')
     Check CMD-shim (($out -match '\[omp-stub\]') -and ($out -match 'hi there')) $out
+    Check CMD-no-tab (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
     $out = CmdRun ('"' + $cli + '" --discover --json')
     Check DISC-cmd (($out -match '"Schema"\s*:\s*2') -and ($out -match '"Agent"\s*:\s*"codex"')) $out
     $out = CmdRun ('"' + $cli + '" --sessions --json')

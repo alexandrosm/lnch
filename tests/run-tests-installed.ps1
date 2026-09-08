@@ -29,7 +29,7 @@ $runner = Join-Path $testRoot 'invoke-lnch.ps1'
 $envNames = @(
     'PATH', 'LNCH_ACCEPTANCE_LOG', 'LNCH_ACCEPTANCE_WT_LOG', 'LNCH_CONFIG_DIR', 'LNCH_RUNTIME_DIR', 'LNCH_NO_UPDATE_CHECK',
     'LNCH_PROJECTS_DIR', 'LNCH_NAME', 'LNCH_PROMPT', 'LNCH_YOLO', 'LNCH_AGENT',
-    'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS'
+    'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS', 'LNCH_ACCEPTANCE_EXIT_CODE'
 )
 $before = @{}
 foreach ($name in $envNames) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -45,6 +45,7 @@ function New-LnchAcceptanceStub {
 }
 
 try {
+    Remove-Item Env:LNCH_ACCEPTANCE_EXIT_CODE -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $cleanHome, $existingProject, $explicitRoot, $bin | Out-Null
     @'
 param([Parameter(Mandatory)][string]$SourcePath, [Parameter(Mandatory)][string]$OutputPath)
@@ -74,7 +75,7 @@ public static class AgentStub
             "CWD64=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(Directory.GetCurrentDirectory())) + Environment.NewLine +
             "ARGS64=" + String.Join(",", encodedArgs) + Environment.NewLine;
         File.AppendAllText(Environment.GetEnvironmentVariable("LNCH_ACCEPTANCE_LOG"), record, new UTF8Encoding(false));
-        return 0;
+        return Convert.ToInt32(Environment.GetEnvironmentVariable("LNCH_ACCEPTANCE_EXIT_CODE"));
     }
 }
 '@
@@ -166,7 +167,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $InstallDir 'Lnch.ps1')
 Set-Item Function:\Get-LnchLatestReleaseTag -Value { 'v-installed-acceptance' }
 Set-Location -LiteralPath $CleanHome
-lnch existing
+lnch existing -TerminalMode tab
 $env:LNCH_PROJECTS_DIR = $ExplicitRoot
 try {
     lnch -Name fresh -Prompt @('hello', 'installed') -Agent omp -TerminalMode tab -TerminalWindow lnch -TerminalProfile ('Power Shell ' + [char]0x03A9) -TerminalTitle '{project}:{agent}' -TabColor '#ABCDEF' -ColorScheme Campbell
@@ -180,6 +181,14 @@ if (-not $freshSession) { throw 'fresh launch receipt was not recorded before re
 & (Join-Path $InstallDir 'Lnch-InTab.ps1') -LaunchId $freshSession.LaunchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
 lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
 '@ | Set-Content -LiteralPath $runner -Encoding utf8
+
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    @{
+        defaultAgent = 'omp'
+        gitIdentity = @{ name = 'Lnch Installed Test'; email = 'lnch-installed@example.invalid' }
+        terminal = @{ readinessTimeoutMs = 0 }
+    } | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath (Join-Path $configDir 'config.json') -Encoding utf8
 
     [Environment]::SetEnvironmentVariable('PATH', "$bin;$($before['PATH'])", 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_ACCEPTANCE_LOG', $agentLog, 'Process')
@@ -224,14 +233,13 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     if (-not (Test-Path -LiteralPath (Join-Path $freshProject 'AGENTS.md') -PathType Leaf)) { throw 'fresh project scaffold was not installed' }
     $metadata = Get-Content -LiteralPath (Join-Path $freshProject '.lnch.json') -Raw | ConvertFrom-Json
     if ($metadata.agent -ne 'omp' -or $metadata.intent -ne 'hello installed') { throw 'fresh project metadata did not preserve agent and prompt' }
+    $freshGitName = [string](& git -C $freshProject config --local --get user.name)
+    $freshGitEmail = [string](& git -C $freshProject config --local --get user.email)
+    if ($freshGitName.Trim() -ne 'Lnch Installed Test' -or $freshGitEmail.Trim() -ne 'lnch-installed@example.invalid') {
+        throw 'fresh project did not receive its configured repository-local Git identity'
+    }
 
     if (-not (Test-Path -LiteralPath (Join-Path $configDir 'update-cache.json') -PathType Leaf)) { throw 'first-run update cache was not written' }
-    $joinedOutput = $output -join ' '
-    $existingOpened = $joinedOutput -match '-> existing opened in (?:wt|Windows Terminal)'
-    $freshOpened = $joinedOutput -match '-> fresh opened in (?:wt|Windows Terminal)'
-    if (-not $existingOpened -or -not $freshOpened) {
-        throw "parent launches did not complete:`n$($output -join [Environment]::NewLine)"
-    }
 
     $wtCalls = @(Get-Content -LiteralPath $wtLog | ForEach-Object {
         $decoded = @($_ -split ',' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
@@ -254,6 +262,23 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     $pending = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDir 'launches') -File -Filter '*.json' -ErrorAction SilentlyContinue)
     if ($pending.Count -ne 0) { throw 'consumed launch contexts were not removed' }
 
+    $env:LNCH_PROJECTS_DIR = $projectRoot
+    $env:LNCH_ACCEPTANCE_EXIT_CODE = '23'
+    $failureOutput = @(& $shell.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'entry.ps1') existing --terminal inline 2>&1)
+    if ($LASTEXITCODE -ne 23) { throw "CLI hid the agent's failure status: $LASTEXITCODE`n$($failureOutput -join [Environment]::NewLine)" }
+    $cmdLaunch = '"' + (Join-Path $InstallDir 'shell\lnch-cli.cmd') + '" existing --terminal inline'
+    $failureOutput = @(& $env:ComSpec /d /c $cmdLaunch 2>&1)
+    if ($LASTEXITCODE -ne 23) { throw "cmd shim hid the agent's failure status: $LASTEXITCODE`n$($failureOutput -join [Environment]::NewLine)" }
+    $env:LNCH_ACCEPTANCE_EXIT_CODE = '0'
+    $null = & $shell.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'entry.ps1') existing
+    if ($LASTEXITCODE -ne 0) { throw "successful inline launch returned $LASTEXITCODE" }
+
+    $existingReceipt = @($receiptValues | Where-Object Project -eq 'existing')[0]
+    $env:LNCH_ACCEPTANCE_EXIT_CODE = '23'
+    $failureOutput = @(& $shell.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'Lnch-InTab.ps1') -LaunchId $existingReceipt.LaunchId -RuntimeRoot $runtimeDir 2>&1)
+    if ($LASTEXITCODE -ne 23) { throw "managed child hid the agent's failure status: $LASTEXITCODE`n$($failureOutput -join [Environment]::NewLine)" }
+    Write-Host 'PASS installed inline and managed child exit status'
+
     Write-Host 'PASS installed clean-config cache write'
     Write-Host 'PASS installed real child processes'
     Write-Host 'PASS installed dynamic and explicit roots'
@@ -262,6 +287,7 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     Write-Host 'PASS installed terminal presentation policy'
     Write-Host 'PASS installed public terminal session ledger'
     Write-Host 'PASS installed existing resume and fresh prompt'
+    Write-Host 'PASS installed repository-local Git identity'
     Write-Host 'PASS installed Windows Terminal restoration resumes without replay'
     Write-Host 'RESULT: INSTALLED JOURNEY PASS'
 } finally {

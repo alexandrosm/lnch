@@ -127,12 +127,13 @@ function global:Get-LnchTerminalConfig {
         [string]$AgentTermHome,
         [Nullable[int]]$AgentTermPort,
         [Nullable[int]]$ReadinessTimeoutMs,
-        [string]$Agent
+        [string]$Agent,
+        [string]$DefaultMode = 'tab'
     )
     $user = Get-LnchUserConfig
     $terminal = if ($user -and $user.terminal) { $user.terminal } else { $null }
     $resolvedBackend = if ($Backend) { $Backend } elseif ($terminal.backend) { [string]$terminal.backend } else { 'wt' }
-    $resolvedMode = if ($Mode) { $Mode } elseif ($terminal.mode) { [string]$terminal.mode } else { 'tab' }
+    $resolvedMode = if ($Mode) { $Mode } elseif ($terminal.mode) { [string]$terminal.mode } else { $DefaultMode }
     $resolvedWindow = if ($Window) { $Window } elseif ($terminal.window) { [string]$terminal.window } else { 'last' }
     $resolvedProfile = if ($ProfileName) { $ProfileName } elseif ($terminal.profile) { [string]$terminal.profile } else { 'current' }
     $resolvedTitle = if ($TitleTemplate) { $TitleTemplate } elseif ($terminal.titleTemplate) { [string]$terminal.titleTemplate } else { '{project}' }

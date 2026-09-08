@@ -34,7 +34,7 @@ exit /b 0
     $env:LNCH_NO_UPDATE_CHECK = '1'
 
     . (Join-Path $lnchRoot 'Lnch.ps1')
-    lnch -Name live-terminal-smoke -Prompt @('real', 'terminal') -Agent omp -TerminalMode new-window -TerminalTitle 'lnch live smoke' -ReadinessTimeoutMs 10000
+    lnch -Name live-terminal-smoke -Prompt @('real', 'terminal') -Agent omp -GitName 'Lnch Smoke' -GitEmail 'lnch-smoke@example.invalid' -TerminalMode new-window -TerminalTitle 'lnch live smoke' -ReadinessTimeoutMs 10000
 
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     $receipt = $null

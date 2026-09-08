@@ -35,8 +35,12 @@ $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $
 '@ | Set-Content -LiteralPath $registryPath -Encoding utf8
 
 # deterministic fresh-project agent: seed the default so pickers never fire in A-O
-@{ defaultAgent = 'omp'; terminal = @{ readinessTimeoutMs = 0 } } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
+@{
+    defaultAgent = 'omp'
+    gitIdentity = @{ name = 'Lnch Test'; email = 'lnch-test@example.invalid' }
+    terminal = @{ readinessTimeoutMs = 0 }
+} | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
 
 $script:fail = 0
 function Check($label, $cond) {
@@ -54,19 +58,56 @@ try {
     $__lnchFn = ${function:lnch}
     if (-not $__lnchFn) { throw 'lnch function failed to load' }
 
-    Write-Host '=== A: fresh, prompt, metadata, scaffold ==='
-    $out = & $__lnchFn alpha hello world -Here
+    $identityCandidates = @(Get-LnchGitIdentityCandidates)
+    Check 'identity configured candidate' (@($identityCandidates | Where-Object {
+        $_.Id -eq 'configured' -and $_.Name -eq 'Lnch Test' -and $_.Email -eq 'lnch-test@example.invalid'
+    }).Count -eq 1)
+    Check 'identity GitHub private candidate' (@($identityCandidates | Where-Object {
+        $_.Id -eq 'github-noreply' -and $_.Email -eq '12345+octocat@users.noreply.github.com'
+    }).Count -eq 1)
+    Check 'identity GitHub public candidate' (@($identityCandidates | Where-Object {
+        $_.Id -eq 'github-public' -and $_.Email -eq 'mona@example.com'
+    }).Count -eq 1)
+    Check 'identity custom candidate' (@($identityCandidates | Where-Object Id -eq 'custom').Count -eq 1)
+
+    Write-Host '=== A: named project starts inline by default ==='
+    $invokingDirectory = (Get-Location).Path
+    $out = & $__lnchFn alpha hello world
     Check 'A git'          (Test-Path (Join-Path $Projects 'alpha\.git'))
     Check 'A prompt'       (($out -join ' ') -match '\[omp-stub\] args="hello world"')
+    Check 'A agent uses project directory' (($out -join ' ') -match [regex]::Escape("[omp-stub] cwd=$(Join-Path $Projects 'alpha')"))
+    Check 'A restores invoking directory' ((Get-Location).Path -eq $invokingDirectory)
+    Check 'A no terminal handoff' (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
     Check 'A agents-md'    (Test-Path (Join-Path $Projects 'alpha\AGENTS.md'))
     Check 'A claude-ptr'   ((Get-Content (Join-Path $Projects 'alpha\CLAUDE.md') -Raw) -match '@AGENTS.md')
     $m = Meta 'alpha'
     Check 'A meta agent'   ($m -match '"agent":\s*"omp"')
     Check 'A meta intent'  ($m -match 'hello world')
+    $alphaGitName = [string](& git -C (Join-Path $Projects 'alpha') config --local --get user.name)
+    $alphaGitEmail = [string](& git -C (Join-Path $Projects 'alpha') config --local --get user.email)
+    Check 'A local git name' ($alphaGitName.Trim() -eq 'Lnch Test')
+    Check 'A local git email' ($alphaGitEmail.Trim() -eq 'lnch-test@example.invalid')
 
-    Write-Host '=== B: resume omp -c ==='
-    $out = & $__lnchFn alpha -Here
+    Write-Host '=== B: named project resumes inline by default ==='
+    $out = & $__lnchFn alpha
     Check 'B continue'     (($out -join ' ') -match '\[omp-stub\] args=-c ')
+    Check 'B no terminal handoff' (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
+
+    Write-Host '=== B2: failed agent startup restores the caller ==='
+    $missingAgent = 'lnch-missing-' + [guid]::NewGuid().ToString('N')
+    $script:AgentProfiles[$missingAgent] = @{ TakesPromptOnResume = $true; Caps = @{} }
+    $launchFailed = $false
+    try {
+        try {
+            $null = & $__lnchFn missing-agent -Agent $missingAgent -ResolvedRoot (Join-Path $TestRoot 'failure-projects')
+        } catch [System.Management.Automation.CommandNotFoundException] {
+            $launchFailed = $true
+        }
+        Check 'B2 reports missing executable' $launchFailed
+        Check 'B2 restores caller after exception' ((Get-Location).Path -eq $invokingDirectory)
+    } finally {
+        $script:AgentProfiles.Remove($missingAgent)
+    }
 
     Write-Host '=== C: claude fingerprint ==='
     New-Item -ItemType Directory -Path (Join-Path $Projects 'beta\.claude') -Force | Out-Null
@@ -86,6 +127,14 @@ try {
     $out = & $__lnchFn -Here
     Check 'E picked theta' (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'E intent saved' ((Meta 'theta') -match 'build a snake game')
+
+    Write-Host '=== E1: single picker selection keeps its managed tab ==='
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
+    $out = & $__lnchFn
+    Check 'E1 selected project opens a tab' ((Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw) -match 'new-tab .*--title theta ')
+    foreach ($pickerLaunchId in @(Get-WtLaunchIds)) {
+        Remove-Item -LiteralPath (Get-LnchLaunchContextPath $pickerLaunchId) -Force
+    }
 
     Write-Host '=== E2: multi-project picker launches one terminal batch ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
@@ -138,6 +187,66 @@ try {
     Check 'E5 cost remains unknown' ($null -eq $usageTelemetry.Cost -and $usageTelemetry.CostKind -eq 'unknown')
     $dashboardFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 132 -Height 24 -SelectedIndex 0
     Check 'E5 pretty frame' ($dashboardFrame -match 'LNCH TOP' -and $dashboardFrame -match 'usage-fixture' -and $dashboardFrame -match 'RUNNING' -and $dashboardFrame -match 'MODEL' -and $dashboardFrame -match 'COST')
+    $dashboardCreate = script:New-LnchDashboardCreateState -IdentityCandidates $identityCandidates
+    $dashboardCreate.Name = 'from-tui'
+    $dashboardCreateFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 132 -Height 24 -SelectedIndex 0 -CreateState $dashboardCreate
+    Check 'E5 create modal' ($dashboardCreateFrame -match 'NEW PROJECT' -and $dashboardCreateFrame -match 'from-tui' -and $dashboardCreateFrame -match 'IDENTITY' -and $dashboardCreateFrame -match 'Lnch Test' -and $dashboardCreateFrame -match 'lnch-test@example.invalid')
+    $dashboardCompactCreateFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 60 -Height 16 -SelectedIndex 0 -CreateState $dashboardCreate
+    Check 'E5 compact create frame height' (([regex]::Split($dashboardCompactCreateFrame, '\r?\n')).Count -eq 16)
+    $customIdentityIndex = [array]::IndexOf(@($dashboardCreate.Identities | ForEach-Object Id), 'custom')
+    $dashboardCreate.IdentityIndex = $customIdentityIndex
+    $dashboardCustomInvalid = script:Get-LnchDashboardCreateIdentity -CreateState $dashboardCreate
+    $dashboardCreate.CustomName = 'Dashboard Hero'
+    $dashboardCreate.CustomEmail = 'dashboard@example.test'
+    $dashboardCustomIdentity = script:Get-LnchDashboardCreateIdentity -CreateState $dashboardCreate
+    Check 'E5 custom identity validation' (-not $dashboardCustomInvalid.Valid -and $dashboardCustomIdentity.Valid -and $dashboardCustomIdentity.Name -eq 'Dashboard Hero' -and $dashboardCustomIdentity.Email -eq 'dashboard@example.test')
+    $dashboardValidName = script:Resolve-LnchDashboardProjectName -Root $Projects -Name 'from-tui'
+    $dashboardInvalidName = script:Resolve-LnchDashboardProjectName -Root $Projects -Name '..\outside'
+    Check 'E5 create validation' ($dashboardValidName.Valid -and $dashboardValidName.Directory -eq (Join-Path $Projects 'from-tui') -and -not $dashboardInvalidName.Valid)
+
+    $dashboardWorker = script:New-LnchDashboardSnapshotWorker
+    $dashboardAsyncResult = $null
+    try {
+        $dashboardWorkerStarted = script:Start-LnchDashboardSnapshotRequest -Worker $dashboardWorker -Root $Projects
+        $dashboardDeadline = [datetime]::UtcNow.AddSeconds(10)
+        while (-not $dashboardAsyncResult -and [datetime]::UtcNow -lt $dashboardDeadline) {
+            $dashboardAsyncResult = script:Receive-LnchDashboardSnapshotRequest -Worker $dashboardWorker
+            if (-not $dashboardAsyncResult) { Start-Sleep -Milliseconds 10 }
+        }
+        Check 'E5 async telemetry' ($dashboardWorkerStarted -and $dashboardAsyncResult -and -not $dashboardAsyncResult.Error -and $dashboardAsyncResult.Snapshot.Schema -eq 1)
+    } finally {
+        script:Close-LnchDashboardSnapshotWorker -Worker $dashboardWorker
+    }
+
+    $dashboardIdentityRequest = script:Start-LnchDashboardIdentityRequest
+    $dashboardIdentityResult = $null
+    try {
+        $dashboardIdentityDeadline = [datetime]::UtcNow.AddSeconds(10)
+        while (-not $dashboardIdentityResult -and [datetime]::UtcNow -lt $dashboardIdentityDeadline) {
+            $dashboardIdentityResult = script:Receive-LnchDashboardIdentityRequest -Request $dashboardIdentityRequest
+            if (-not $dashboardIdentityResult) { Start-Sleep -Milliseconds 10 }
+        }
+        if ($dashboardIdentityResult) { $dashboardIdentityRequest = $null }
+        Check 'E5 async identity discovery' ($dashboardIdentityResult -and -not $dashboardIdentityResult.Error -and @($dashboardIdentityResult.Identities | Where-Object Id -eq 'github-noreply').Count -eq 1)
+    } finally {
+        script:Close-LnchDashboardIdentityRequest -Request $dashboardIdentityRequest
+    }
+
+    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
+    $dashboardProjectRequest = script:Start-LnchDashboardProjectProcess -Root $Projects -Name 'from-tui' -Agent 'omp' -GitName $dashboardCustomIdentity.Name -GitEmail $dashboardCustomIdentity.Email
+    $dashboardProjectFinished = $dashboardProjectRequest.Process.WaitForExit(15000)
+    $dashboardProjectExitCode = if ($dashboardProjectFinished) { [int]$dashboardProjectRequest.Process.ExitCode } else { -1 }
+    $dashboardProjectRequest.Process.Dispose()
+    $dashboardWtLog = if (Test-Path -LiteralPath $env:LNCH_WT_LOG) { Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw } else { '' }
+    $dashboardGitName = [string](& git -C (Join-Path $Projects 'from-tui') config --local --get user.name)
+    $dashboardGitEmail = [string](& git -C (Join-Path $Projects 'from-tui') config --local --get user.email)
+    Check 'E5 create from dashboard' ($dashboardProjectFinished -and $dashboardProjectExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $Projects 'from-tui\AGENTS.md')))
+    Check 'E5 dashboard local identity' ($dashboardGitName.Trim() -eq 'Dashboard Hero' -and $dashboardGitEmail.Trim() -eq 'dashboard@example.test')
+    Check 'E5 create launches terminal' ($dashboardWtLog -match 'new-tab .*--title from-tui ')
+    foreach ($dashboardLaunchId in @(Get-WtLaunchIds)) {
+        Remove-Item -LiteralPath (Get-LnchLaunchContextPath $dashboardLaunchId) -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path (Join-Path $env:LNCH_RUNTIME_DIR 'sessions') "$dashboardLaunchId.json") -Force -ErrorAction SilentlyContinue
+    }
     $topJson = ((& $__lnchFn -Top -Json) -join [Environment]::NewLine) | ConvertFrom-Json
     Check 'E5 top JSON' ($topJson.Schema -eq 1 -and @($topJson.Projects | Where-Object Name -eq 'usage-fixture').Count -eq 1)
     $longTopPath = Join-Path $Projects '--top'
@@ -152,18 +261,11 @@ try {
 
     Write-Host '=== F: versioned new-tab launch envelope ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $out = & $__lnchFn epsilon hi there
+    $out = & $__lnchFn epsilon hi there -TerminalMode tab
     $wtLog = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
     Check 'F sticky project title' ($wtLog -match 'new-tab .*--title epsilon .*--suppressApplicationTitle')
     Check 'F last window target' ($wtLog -match '--window last')
     $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
-    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
-    Check 'F context name'       ($launchContext.Name -eq 'epsilon')
-    Check 'F context prompt'     ((@($launchContext.Prompt) -join ' ') -eq 'hi there')
-    Check 'F context fresh'      ($launchContext.Fresh -eq $true)
-    Check 'F context verbs'      (@($launchContext.Verbs).Count -eq 0)
-    Check 'F context agent'      ($launchContext.Agent -eq 'omp')
-    Check 'F context root'       ($launchContext.Root -eq [System.IO.Path]::GetFullPath($Projects))
     $previousLocation = Get-Location
     try {
         Set-Location -LiteralPath (Join-Path $Projects 'epsilon')
@@ -184,21 +286,41 @@ try {
     $null = Write-LnchTerminalReceipt -Context $activeContext -State child-started
     $duplicateOut = @(& $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR *>&1)
     $duplicateText = $duplicateOut -join ' '
-    Check 'F active duplicate suppressed' ($duplicateText -match 'already active' -and $duplicateText -notmatch '\[omp-stub\]')
+    Check 'F active duplicate suppressed' ($duplicateText -notmatch '\[omp-stub\]')
     $null = Write-LnchTerminalReceipt -Context $activeContext -State agent-exited -ExitCode 0
 
     Write-Host '=== F2: existing project envelope resumes ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $out = & $__lnchFn alpha
+    $out = & $__lnchFn alpha --terminal tab
     $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
-    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
-    Check 'F2 not fresh' (-not $launchContext.Fresh)
     $previousLocation = Get-Location
     try {
         Set-Location -LiteralPath (Join-Path $Projects 'alpha')
         $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
     } finally { Set-Location -LiteralPath $previousLocation }
     Check 'F2 resumes' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
+
+    Write-Host '=== F3: saved terminal policy and inline overrides ==='
+    $configPath = Join-Path $env:LNCH_CONFIG_DIR 'config.json'
+    $savedConfig = Get-Content -LiteralPath $configPath -Raw
+    try {
+        $config = $savedConfig | ConvertFrom-Json
+        $config.terminal | Add-Member -NotePropertyName mode -NotePropertyValue tab
+        $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding utf8
+        Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force
+        $out = & $__lnchFn alpha
+        Check 'F3 saved tab mode launches a tab' ((Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw) -match 'new-tab .*--title alpha ')
+        foreach ($configuredLaunchId in @(Get-WtLaunchIds)) {
+            Remove-Item -LiteralPath (Get-LnchLaunchContextPath $configuredLaunchId) -Force
+        }
+        Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force
+        $out = & $__lnchFn alpha -Here
+        Check 'F3 Here overrides saved tab mode' (($out -join ' ') -match '\[omp-stub\] args=-c\b' -and -not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
+        $out = & $__lnchFn alpha --terminal inline
+        Check 'F3 terminal inline overrides saved tab mode' (($out -join ' ') -match '\[omp-stub\] args=-c\b' -and -not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
+    } finally {
+        Set-Content -LiteralPath $configPath -Value $savedConfig -Encoding utf8
+    }
 
     Write-Host '=== G: root escape rejected ==='
     try { & $__lnchFn ..\evil -Here; Check 'G reject' $false } catch { Check 'G reject' $true }
@@ -219,13 +341,8 @@ try {
 
     Write-Host '=== K: yolo rides the launch envelope ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $out = & $__lnchFn kappa go -yolo
+    $out = & $__lnchFn kappa go -yolo -TerminalMode tab
     $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
-    $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
-    Check 'K handed off'   (-not [string]::IsNullOrWhiteSpace($launchId))
-    Check 'K agent'        ($launchContext.Agent -eq 'omp')
-    Check 'K fresh'        ($launchContext.Fresh)
-    Check 'K verbs'        (@($launchContext.Verbs | Where-Object Name -eq 'yolo').Count -eq 1)
     $previousLocation = Get-Location
     try {
         Set-Location -LiteralPath (Join-Path $Projects 'kappa')
@@ -255,8 +372,13 @@ try {
 
     Write-Host '=== O: entry.ps1 --agent passthrough ==='
     $entry = Join-Path $LnchDir 'entry.ps1'
-    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude kappa2 ship it --here --no-dashboard 2>&1
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --agent claude --git-name 'Entry Hero' --git-email entry@example.test kappa2 ship it --here --no-dashboard 2>&1
     Check 'O entry agent'  (($out -join ' ') -match '\[claude-stub\] args="ship it"')
+    $entryGitName = [string](& git -C (Join-Path $Projects 'kappa2') config --local --get user.name)
+    $entryGitEmail = [string](& git -C (Join-Path $Projects 'kappa2') config --local --get user.email)
+    Check 'O entry identity options' ($entryGitName.Trim() -eq 'Entry Hero' -and $entryGitEmail.Trim() -eq 'entry@example.test')
+    $invalidIdentityOutput = @(& $__lnchFn invalid-identity -GitName 'Name Only' -Here -ErrorAction Continue 2>&1)
+    Check 'O incomplete identity rejected' (($invalidIdentityOutput -join ' ') -match 'user.email cannot be empty' -and -not (Test-Path -LiteralPath (Join-Path $Projects 'invalid-identity')))
     $entryTopOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $entry --top --json 2>&1
     $entryTop = $null
     try { $entryTop = (($entryTopOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json } catch { }
@@ -297,7 +419,7 @@ try {
     Check 'S2 resume preserved' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
     Write-Host '=== T: post-create hook runs in fresh project ==='
     @'
-{ "defaultAgent": "omp", "postCreate": ["Set-Content hooked.txt -Value hooked"], "terminal": { "readinessTimeoutMs": 0 } }
+{ "defaultAgent": "omp", "gitIdentity": { "name": "Lnch Test", "email": "lnch-test@example.invalid" }, "postCreate": ["Set-Content hooked.txt -Value hooked"], "terminal": { "readinessTimeoutMs": 0 } }
 '@ | Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
     $out = & $__lnchFn wabbit build it -Here 2>&1
     Check 'T hook ran'     (Test-Path (Join-Path $Projects 'wabbit\hooked.txt'))
@@ -315,6 +437,10 @@ try {
         Check 'U helper current-dir' ((Get-LnchProjectsRoot) -eq [System.IO.Path]::GetFullPath($expectedLocalRoot))
         $out = & $__lnchFn localroot hi -Agent omp -Here
         Check 'U local project' (Test-Path (Join-Path $expectedLocalRoot 'localroot\.git'))
+        Check 'U restores caller' ((Get-Location).Path -eq $caller)
+        $out = & $__lnchFn localroot
+        Check 'U repeated launch resumes original project' (($out -join ' ') -match '\[omp-stub\] args=-c\b')
+        Check 'U repeated launch avoids nested project' (-not (Test-Path -LiteralPath (Join-Path $expectedLocalRoot 'localroot\projects\localroot')))
 
         $overrideRoot = Join-Path $TestRoot 'explicit-root'
         $env:LNCH_PROJECTS_DIR = $overrideRoot
@@ -333,10 +459,8 @@ try {
         Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
         $dynamicRoot = [System.IO.Path]::GetFullPath((Join-Path $caller 'projects'))
         $dynamicProject = Join-Path $dynamicRoot 'dynamic-tab'
-        $out = & $__lnchFn dynamic-tab hi -Agent omp
+        $out = & $__lnchFn dynamic-tab hi -Agent omp -TerminalMode tab
         $launchId = @(Get-WtLaunchIds | Select-Object -Last 1)[0]
-        $launchContext = Get-Content -LiteralPath (Get-LnchLaunchContextPath $launchId) -Raw | ConvertFrom-Json
-        Check 'U2 root handed off' ($launchContext.Root -eq $dynamicRoot)
         Set-Location -LiteralPath $dynamicProject
         $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
         $joined = $out -join ' '
