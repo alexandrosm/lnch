@@ -1,10 +1,11 @@
 # Changelog
 
-## v1.6.0
+## v1.6.1
 
 - Named project launches (`lnch <name>`) now run in the current terminal by default. Use `--terminal tab` or a saved `terminal.mode` to opt into managed terminals; picker and dashboard launches retain their tab default, and `--here` still forces inline execution.
 - Restored the invoking directory after inline launches, including startup failures, so repeated named launches resume the original project instead of creating nested project directories.
 - Preserved agent exit codes through the CLI entry script, cmd shim, and managed child entry script instead of reporting success after an agent failure.
+- Made the installed-product test runner report its own result after checking intentionally failing agents, preventing passing assertions from producing a failing CI exit status.
 - Added a colorful `lnch --top` dashboard with project-grouped process-tree CPU, memory, process count, cumulative I/O, disk usage, receipt state, pinned model, detail navigation, responsive layouts, and a schema-1 JSON snapshot.
 - Moved dashboard telemetry refreshes onto a persistent background runspace and separated data refresh from frame rendering, so navigation and resize input no longer wait for process discovery; cursor-home repainting also removes full-screen clear flicker.
 - Added an in-dashboard `N` flow for naming a project, cycling installed agents, and launching the new project into the configured managed terminal without leaving or blocking the dashboard.

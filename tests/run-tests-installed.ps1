@@ -294,3 +294,6 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     foreach ($name in $envNames) { [Environment]::SetEnvironmentVariable($name, $before[$name], 'Process') }
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# Expected failing children must not determine the successful suite's exit status.
+exit 0
