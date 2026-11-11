@@ -352,6 +352,7 @@ function global:Get-LnchSessionInventory {
     )
     $scopeKey = if ($Agent) { (@($Agent | Sort-Object -Unique) -join ',') } else { '*' }
     $cacheKey = (($cacheVariables | ForEach-Object { "$_=$([Environment]::GetEnvironmentVariable($_, 'Process'))" }) -join '|') + "|agents=$scopeKey"
+    $cacheKey += "|cwd=$((Get-Location).Path)|roots=$(@(Get-LnchProjectRoots) -join '|')"
     $cacheValid = -not $Refresh -and $script:LnchSessionInventoryCache -and
         $script:LnchSessionInventoryCache.Key -eq $cacheKey -and
         (([datetime]::UtcNow - $script:LnchSessionInventoryCache.CreatedAt).TotalSeconds -lt 15)

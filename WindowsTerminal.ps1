@@ -377,12 +377,65 @@ function global:Set-LnchLaunchTerminalIdentity {
     Write-LnchAtomicJson -Path (Get-LnchLaunchContextPath $Context.LaunchId) -Value $Context
 }
 
+function script:Resolve-LnchWindowsTerminalCommand {
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object[]]$ProcessTable = $null,
+        [int]$ProcessId = $PID
+    )
+
+    if ($env:WT_SESSION -or $PSBoundParameters.ContainsKey('ProcessTable')) {
+        try {
+            $processes = if ($null -ne $ProcessTable) {
+                @($ProcessTable)
+            } else {
+                @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name, ExecutablePath -ErrorAction Stop)
+            }
+            $byId = @{}
+            foreach ($process in $processes) { $byId[[int]$process.ProcessId] = $process }
+            $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+            $currentId = $ProcessId
+            while ($currentId -gt 0 -and $byId.ContainsKey([int]$currentId) -and $seen.Add([int]$currentId)) {
+                $process = $byId[[int]$currentId]
+                $source = [string]$process.ExecutablePath
+                $name = [string]$process.Name
+                if (-not $name -and $source) { $name = [System.IO.Path]::GetFileName($source) }
+                if ($name -match '^(WindowsTerminal(?:Preview)?|wtx|wtd)\.exe$' -and
+                    $source -and $source -notmatch '[\\/]WindowsApps[\\/]' -and
+                    (Test-Path -LiteralPath $source -PathType Leaf)) {
+                    return [pscustomobject][ordered]@{
+                        Name       = [System.IO.Path]::GetFileName($source)
+                        Source     = [System.IO.Path]::GetFullPath($source)
+                        Origin     = 'current-terminal'
+                        ProcessId  = [int]$process.ProcessId
+                    }
+                }
+                $currentId = [int]$process.ParentProcessId
+            }
+        } catch { }
+    }
+
+    $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if ($wt) {
+        return [pscustomobject][ordered]@{
+            Name      = [string]$wt.Name
+            Source    = [string]$wt.Source
+            Origin    = 'path'
+            ProcessId = $null
+        }
+    }
+    $null
+}
+
 function global:Invoke-LnchWindowsTerminal {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object[]]$Contexts)
+    param(
+        [Parameter(Mandatory)][object[]]$Contexts,
+        $TerminalCommand
+    )
     if ($Contexts.Count -eq 0) { return @() }
-    $wt = @(Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
-    if (-not $wt) { return @($Contexts | ForEach-Object { [pscustomobject]@{ Context = $_; Accepted = $false; Ready = $false; Receipt = $null; Error = 'wt not found' } }) }
+    if (-not $TerminalCommand) { $TerminalCommand = Resolve-LnchWindowsTerminalCommand }
+    if (-not $TerminalCommand) { return @($Contexts | ForEach-Object { [pscustomobject]@{ Context = $_; Accepted = $false; Ready = $false; Receipt = $null; Error = 'Windows Terminal-compatible command not found' } }) }
     foreach ($context in $Contexts) { Set-LnchLaunchTerminalIdentity -Context $context -Backend wt }
     $shell = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
     $shellExe = if ($shell) { $shell.Source } else { Join-Path $PSHOME 'powershell.exe' }
@@ -398,9 +451,9 @@ function global:Invoke-LnchWindowsTerminal {
             Add-LnchWtActionArguments -Arguments $arguments -Context $context -FirstInGroup $first -ShellExe $shellExe -Launcher $launcher
             $first = $false
         }
-        $wtOutput = @(& $wt.Source @($arguments.ToArray()) 2>&1)
-        $wtExitCode = $LASTEXITCODE
-        $accepted = $wtExitCode -eq 0
+        $terminalOutput = @(& $TerminalCommand.Source @($arguments.ToArray()) 2>&1)
+        $terminalExitCode = $LASTEXITCODE
+        $accepted = $terminalExitCode -eq 0
         foreach ($context in @($windowGroup.Group)) {
             $receipt = if ($accepted) { Wait-LnchTerminalReceipt -Context $context } else { $null }
             $ready = $accepted -and ([int]$context.Terminal.ReadinessTimeoutMs -eq 0 -or $null -ne $receipt)
@@ -409,7 +462,7 @@ function global:Invoke-LnchWindowsTerminal {
                 Accepted = $accepted
                 Ready    = $ready
                 Receipt  = $receipt
-                Error    = if (-not $accepted) { "wt exited with $wtExitCode`: $($wtOutput -join ' ')" } elseif (-not $ready) { 'child readiness timeout' } else { $null }
+                Error    = if (-not $accepted) { "$($TerminalCommand.Name) exited with $terminalExitCode`: $($terminalOutput -join ' ')" } elseif (-not $ready) { 'child readiness timeout' } else { $null }
             }) | Out-Null
         }
     }

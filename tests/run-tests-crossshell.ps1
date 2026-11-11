@@ -18,6 +18,7 @@ $stubBin = Join-Path $LnchRoot 'tests\stubs'
 $sysRoot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
 $gitCmd  = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git\cmd' } else { 'C:\Program Files\Git\cmd' }
 $env:PATH = "$stubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerShell\v1.0;$env:PATH"
+Remove-Item Env:WT_SESSION -ErrorAction SilentlyContinue
 
 # MSYS2 bash only: the WindowsApps bash.exe is a WSL launcher that drops
 $env:LNCH_NO_UPDATE_CHECK = '1'
@@ -36,6 +37,7 @@ $bodyPosix = WinToPosix (Join-Path $LnchRoot 'tests\_shim-body.sh')
 
 $proj = Join-Path ([IO.Path]::GetTempPath()) ('ps-shim-fixed-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $proj | Out-Null
+$env:LNCH_DISCOVERY_HOME = Join-Path $proj 'home'
 & (Join-Path $LnchRoot 'tests\_seed-bashmatrix.ps1') -Root $proj
 
 # redirected user-config: deterministic omp default across all fresh cases
@@ -118,21 +120,16 @@ try {
     $out = BashRun 'lnch beta --here'
     Check C-claude ($out -match '\[claude-stub\] args=-c')
 
-    Write-Host '=== E: intent saved; picker resumes ==='
+    Write-Host '=== E: named project prompt ==='
     $out = BashRun 'lnch theta build a snake game --here'
     Check E-fresh  ($out -match 'args="build a snake game"') $out
-    $out = BashRun 'lnch --here'
-    Check E-picker (($out -match '\[omp-stub\]') -and ($out -match 'args=-c\b')) $out
 
-    Write-Host '=== E2: multi-project picker through bash face ==='
+    Write-Host '=== E2: bare command dashboard through bash face ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $env:LNCH_TEST_FZF_MULTI = '1'
-    $out = BashRun 'lnch'
-    Remove-Item Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
-    $wtOut = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
-    Check E2-theta ($wtOut -match 'new-tab .*--title theta ') $wtOut
-    Check E2-alpha ($wtOut -match 'new-tab .*--title alpha ') $wtOut
-    Check E2-count (([regex]::Matches($wtOut, '^WT-STUB', [System.Text.RegularExpressions.RegexOptions]::Multiline).Count -eq 1) -and ([regex]::Matches($wtOut, 'new-tab').Count -eq 2)) $wtOut
+    $out = BashRun 'lnch --json'
+    $dashboard = $out | ConvertFrom-Json
+    Check E2-dashboard ($dashboard.Schema -eq 1 -and @($dashboard.Projects | Where-Object Name -eq 'theta').Count -eq 1) $out
+    Check E2-no-tab (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
 
     Write-Host '=== G: root escape rejected ==='
     BashRun 'lnch ../evil --here' *> $null

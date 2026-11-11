@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Bare `lnch` now opens the live dashboard (`--top`) instead of the separate project picker.
+- Pressing `Enter` on a dashboard project resumes its owning agent in a new tab while keeping the dashboard open. Named `lnch <name>` commands remain inline by default.
+- Managed WT-compatible launches now resolve the terminal executable from the current `WT_SESSION` process ancestry before consulting `PATH`, so tabs opened from the unpackaged WTX fork stay in WTX instead of stock Windows Terminal.
+- Before every agent launch, lnch now runs the full synchronous update in the final inline or managed-tab context, without the cached-release/version bypass. Git checkouts pull even at the same version; archive installs require a resolved, SHA256-verified release. Concurrent updates serialize, launch-time updates do not rewrite shell profiles, and success or failure is reported before continuing into the requested agent.
+- Added ordered secondary project roots through `secondaryProjectRoots` or `LNCH_SECONDARY_PROJECTS_DIRS`; CLI resume, dashboard inventory/launch, JSON snapshots, and tab completion now span all roots while new projects and duplicate-name precedence remain anchored to the primary root.
+- Fixed destructive PowerShell archive updates: shipped files are copied without deleting the installation root or user projects/custom agents; invalid archives are rejected before copying, failed Git pulls stop before installers run, and downloads use isolated, self-cleaning temporary directories.
+- Managed launches and restored tabs now fail if their project directory is gone instead of silently recreating an empty workspace.
+- Fixed `:plan` and `:edits` capability resolution, prevented duplicate resume flags from `:resume`, and preserved picker precedence.
+- Project-local discovery now includes configured secondary roots; changing effective roots or the current directory invalidates cached session inventories.
+- Made `-Doctor` writability probes collision-safe so an existing `.doctor-probe` file is never overwritten or deleted.
+- Default-agent selection now compares native session history for the exact workspace with confirmed lnch usage, honors explicit agent overrides on existing projects, and no longer mistakes generated `CLAUDE.md` files or same-named directories for usage. Idle dashboard rows share the same selection rules.
+- Project metadata records `lastUsed` only after successful execution, preserving extra fields and preventing failed starts, queued handoffs, or older sessions finishing later from replacing the most recently confirmed agent.
+- Fixed singleton dashboard-root handling so a sole Windows path remains an array element instead of being indexed as its drive-letter character.
+
 ## v1.6.1
 
 - Named project launches (`lnch <name>`) now run in the current terminal by default. Use `--terminal tab` or a saved `terminal.mode` to opt into managed terminals; picker and dashboard launches retain their tab default, and `--here` still forces inline execution.

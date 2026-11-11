@@ -24,9 +24,27 @@ jobs:
       - name: Engine matrix (Windows PowerShell 5.1)
         shell: powershell
         run: tests/run-tests.ps1
+      - name: Last-used agent selection (5.1)
+        shell: powershell
+        run: tests/run-tests-agent-selection.ps1
+      - name: Last-used agent selection (7)
+        shell: pwsh
+        run: tests/run-tests-agent-selection.ps1
+      - name: Real pre-launch update flow (5.1)
+        shell: powershell
+        run: tests/run-tests-update.ps1
+      - name: Real pre-launch update flow (7)
+        shell: pwsh
+        run: tests/run-tests-update.ps1
       - name: Windows Terminal adapter contracts
         shell: powershell
         run: tests/run-tests-terminal.ps1
+      - name: PowerShell bootstrap data safety (5.1)
+        shell: powershell
+        run: tests/run-tests-bootstrap.ps1
+      - name: PowerShell bootstrap data safety (7)
+        shell: pwsh
+        run: tests/run-tests-bootstrap.ps1
 
 
       - name: Cross-shell shims (pwsh + Git-bash/cmd children)

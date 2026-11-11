@@ -1,5 +1,7 @@
 # Installs/updates the `lnch` function into PowerShell profiles.
 # Removes both lnch and legacy project-starter profile lines (clean cutover).
+param([switch]$ContinueLaunch)
+
 $src = Join-Path $PSScriptRoot 'Lnch.ps1'
 if (-not (Test-Path -LiteralPath $src)) { throw "Lnch.ps1 not found next to install.ps1 ($PSScriptRoot)" }
 
@@ -27,9 +29,11 @@ if ($effective -eq 'Restricted') {
     catch { Write-Warning "could not relax execution policy: $_" }
 }
 
-Write-Host ''
-Write-Host 'ready. open a NEW PowerShell window, then:'
-Write-Host '  lnch                    # multi-project picker'
-Write-Host '  lnch my-project         # create/resume one project'
-Write-Host '  lnch my-task fix bug    # initial prompt'
-Write-Host '  lnch -Top               # live project/agent dashboard'
+if (-not $ContinueLaunch) {
+    Write-Host ''
+    Write-Host 'ready. open a NEW PowerShell window, then:'
+    Write-Host '  lnch                    # dashboard; Enter opens a project tab'
+    Write-Host '  lnch my-project         # create/resume one project'
+    Write-Host '  lnch my-task fix bug    # initial prompt'
+    Write-Host '  lnch -Top               # live project/agent dashboard'
+}

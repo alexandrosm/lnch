@@ -1,5 +1,5 @@
 @echo off
-rem Context-aware fzf stub: prefers "theta*" lines (project picker), else first line.
+rem Deterministic fzf stub: selects the first available agent or Git identity.
 rem Resolves PowerShell by ABSOLUTE path - immune to broken inherited PATH.
 setlocal
 set "PSEXE=C:\Program Files\PowerShell\7\pwsh.exe"

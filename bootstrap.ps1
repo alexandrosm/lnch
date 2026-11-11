@@ -3,7 +3,11 @@
 # Optional: -Version vX.Y.Z pins a tagged release (default: latest release,
 # falling back to the main branch when the API is unreachable).
 # Tagged downloads are SHA256-verified against the release's SHA256SUMS.
-param([string]$Version = '')
+param(
+    [string]$Version = '',
+    [string]$Destination = '',
+    [switch]$ContinueLaunch
+)
 
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
@@ -11,23 +15,26 @@ $ProgressPreference = 'SilentlyContinue'
 
 $repo    = 'https://github.com/alexandrosm/lnch'
 $api     = 'https://api.github.com/repos/alexandrosm/lnch'
-$dest    = Join-Path $HOME '.lnch'
+$dest = if ([string]::IsNullOrWhiteSpace($Destination)) { Join-Path $HOME '.lnch' } else { [IO.Path]::GetFullPath($Destination) }
+if ([string]::Equals($dest, [IO.Path]::GetPathRoot($dest), [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to install lnch over filesystem root '$dest'"
+}
 $legacyDest = Join-Path $HOME '.project-starter'
 $headers = @{ 'User-Agent' = 'lnch-bootstrap' }
 
-if (-not $Version) {
+$isGitCheckout = Test-Path -LiteralPath (Join-Path $dest '.git')
+if (-not $Version -and -not $isGitCheckout) {
     Write-Host 'resolving latest release...'
     try {
         $Version = (Invoke-RestMethod -Uri "$api/releases/latest" -TimeoutSec 10 -Headers $headers).tag_name
         Write-Host "latest release: $Version"
     } catch {
+        if ($ContinueLaunch) { throw 'could not resolve a verified release for the pre-launch update' }
         Write-Warning 'could not reach the GitHub API; falling back to the main branch'
         $Version = 'main'
     }
 }
 
-$tmpZip = Join-Path ([IO.Path]::GetTempPath()) ('lnch-' + ($Version -replace '[^A-Za-z0-9._-]', '') + '.zip')
-$tmpExt = Join-Path ([IO.Path]::GetTempPath()) ('lnch-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
 function Get-LnchFileSha256([string]$Path) {
     # raw .NET hash: immune to cmdlet/module availability in stripped hosts
@@ -44,38 +51,57 @@ function Get-LnchFileSha256([string]$Path) {
     }
 }
 
-Write-Host "fetching lnch $Version..."
-if ($Version -eq 'main') {
-    Invoke-WebRequest -Uri "$repo/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing
-    $innerPrefix = 'lnch-main'
-} else {
-    Invoke-WebRequest -Uri "$repo/releases/download/$Version/lnch-$Version.zip" -OutFile $tmpZip -UseBasicParsing
-    $sumsTxt = Join-Path ([IO.Path]::GetTempPath()) 'SHA256SUMS'
-    Invoke-WebRequest -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $sumsTxt -UseBasicParsing
-    $sumLine = (Get-Content $sumsTxt) |
-        Where-Object { $_ -match ('lnch-' + [regex]::Escape($Version) + '\.zip') } |
-        Select-Object -First 1
-    if (-not $sumLine) { throw 'SHA256SUMS did not contain an entry for the archive' }
-    $expected = ($sumLine -split '\s+')[0]
-    $actual = Get-LnchFileSha256 $tmpZip
-    if ($actual -ne $expected) { throw "checksum mismatch: expected $expected got $actual" }
-    Write-Host 'checksum verified'
-    $innerPrefix = "lnch-$Version"
-}
-
-if (Test-Path $tmpExt) { Remove-Item $tmpExt -Recurse -Force }
-Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpExt -Force
-$unpacked = Join-Path $tmpExt $innerPrefix
-if (-not (Test-Path (Join-Path $unpacked 'Lnch.ps1'))) { $unpacked = $tmpExt }
-
-if (Test-Path (Join-Path $dest '.git')) {
+if ($isGitCheckout) {
     Write-Host 'updating existing clone...'
-    git -C $dest pull --ff-only | Out-Null
+    git -C $dest pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "git pull failed with exit code $LASTEXITCODE" }
 } else {
-    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-    Copy-Item $unpacked $dest -Recurse
+    # Each invocation owns its downloads, including the checksum manifest.
+    $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('lnch-update-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmpRoot | Out-Null
+    try {
+        $tmpZip = Join-Path $tmpRoot 'release.zip'
+        $tmpExt = Join-Path $tmpRoot 'unpacked'
+        Write-Host "fetching lnch $Version..."
+        if ($Version -eq 'main') {
+            Invoke-WebRequest -Uri "$repo/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing
+            $innerPrefix = 'lnch-main'
+        } else {
+            Invoke-WebRequest -Uri "$repo/releases/download/$Version/lnch-$Version.zip" -OutFile $tmpZip -UseBasicParsing
+            $sumsTxt = Join-Path $tmpRoot 'SHA256SUMS'
+            Invoke-WebRequest -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $sumsTxt -UseBasicParsing
+            $sumLine = (Get-Content -LiteralPath $sumsTxt) |
+                Where-Object { $_ -match ('^[0-9a-fA-F]{64}\s+\*?' + [regex]::Escape("lnch-$Version.zip") + '$') } |
+                Select-Object -First 1
+            if (-not $sumLine) { throw 'SHA256SUMS did not contain an entry for the archive' }
+            $expected = ($sumLine -split '\s+')[0]
+            $actual = Get-LnchFileSha256 $tmpZip
+            if ($actual -ne $expected) { throw "checksum mismatch: expected $expected got $actual" }
+            Write-Host 'checksum verified'
+            $innerPrefix = "lnch-$Version"
+        }
+
+        Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpExt
+        $unpacked = Join-Path $tmpExt $innerPrefix
+        if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'Lnch.ps1') -PathType Leaf)) { $unpacked = $tmpExt }
+        foreach ($required in @('Lnch.ps1', 'entry.ps1', 'install.ps1', 'install-cmd.ps1', 'install.sh')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $unpacked $required) -PathType Leaf)) {
+                throw "archive is missing $required; installation unchanged"
+            }
+        }
+
+        # Replace shipped files, never the enclosing directory: users may keep
+        # custom agents.json and projects under an installed lnch root.
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        Copy-Item -Path (Join-Path $unpacked '*') -Destination $dest -Recurse -Force
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
-Remove-Item $tmpZip, $tmpExt -Recurse -Force -ErrorAction SilentlyContinue
+
+# The command and shell shims already point at this installation. A launch-time
+# update must not rewrite profiles or registry hooks on every agent invocation.
+if ($ContinueLaunch) { return }
 
 & (Join-Path $dest 'install.ps1')
 & (Join-Path $dest 'install-cmd.ps1')

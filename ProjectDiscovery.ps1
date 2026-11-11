@@ -156,7 +156,7 @@ function script:Read-LnchProjectJsonlHeader {
                 'claude' {
                     if ($record.cwd) {
                         $id = if ($record.sessionId) { $record.sessionId } elseif ($record.session_id) { $record.session_id } else { [System.IO.Path]::GetFileNameWithoutExtension($Path) }
-                        return [pscustomobject]@{ Path = [string]$record.cwd; Id = [string]$id }
+                        return [pscustomobject]@{ Path = [string]$record.cwd; Id = [string]$id; IsChild = [bool]$record.isSidechain }
                     }
                 }
                 'codex' {
@@ -186,18 +186,27 @@ function script:Add-LnchJsonlProjectEvidence {
         [object[]]$Files,
         [hashtable]$Projects,
         [string]$NativeKey,
-        [string]$Source
+        [string]$Source,
+        [datetime]$Since = [datetime]::MinValue,
+        [string]$ProjectPath,
+        [switch]$RootSessionsOnly
     )
     $resolved = 0
-    foreach ($file in @($Files)) {
+    $projectKey = if ($ProjectPath) { Get-LnchProjectKey $ProjectPath } else { $null }
+    $candidates = @($Files | Where-Object { $_.LastWriteTimeUtc -gt $Since })
+    if ($projectKey) { $candidates = @($candidates | Sort-Object LastWriteTimeUtc -Descending) }
+    foreach ($file in $candidates) {
         $header = Read-LnchProjectJsonlHeader -Agent $Agent -Path $file.FullName
         if ($header -and $header.Path) {
+            if ($RootSessionsOnly -and $header.IsChild) { continue }
+            if ($projectKey -and (Get-LnchProjectKey $header.Path) -ne $projectKey) { continue }
             $key = if ($NativeKey) { $NativeKey } elseif ($header.Id) { $header.Id } else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
             $count = if ($Agent -eq 'codex' -and $header.IsChild) { 0 } else { 1 }
             $evidenceSource = if ($Agent -eq 'codex' -and $header.IsChild) { 'child-rollout-jsonl' } else { $Source }
             $confidence = if ($count -eq 0) { 'inferred' } else { 'verified' }
             Add-LnchAgentProject $Projects $header.Path $key $evidenceSource $count $file.LastWriteTimeUtc $confidence
             $resolved++
+            if ($projectKey) { break }
         }
     }
     $resolved
@@ -208,8 +217,7 @@ function script:Get-LnchDiscoveryDirectories {
     if ($env:LNCH_DISCOVERY_ROOTS) {
         $roots += @($env:LNCH_DISCOVERY_ROOTS -split [regex]::Escape([string][System.IO.Path]::PathSeparator) | Where-Object { $_ })
     }
-    if ($env:LNCH_PROJECTS_DIR) { $roots += $env:LNCH_PROJECTS_DIR }
-    try { $roots += Get-LnchProjectsRoot } catch { }
+    try { $roots += @(Get-LnchProjectRoots) } catch { }
     $homePath = Get-LnchDiscoveryHome
     $roots += Join-Path $homePath 'projects'
     if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $roots += 'C:\projects' }
@@ -263,7 +271,14 @@ function script:Add-LnchProjectMarkers {
 }
 
 function script:Get-LnchAgentProjectEvidence {
-    param([object]$AgentState, [string[]]$KnownDirectories)
+    param(
+        [object]$AgentState,
+        [string[]]$KnownDirectories,
+        [switch]$SessionActivityOnly,
+        [datetime]$Since = [datetime]::MinValue,
+        [string]$ProjectPath
+    )
+    $jsonlOptions = @{ Since = $Since; ProjectPath = $ProjectPath; RootSessionsOnly = $SessionActivityOnly }
     $agent = $AgentState.Agent
     $projects = @{}
     $notes = @()
@@ -277,7 +292,7 @@ function script:Get-LnchAgentProjectEvidence {
                 foreach ($bucket in @(Get-ChildItem -LiteralPath $sessions -Directory -ErrorAction SilentlyContinue)) {
                     $files = @(Get-ChildItem -LiteralPath $bucket.FullName -File -Filter '*.jsonl' -ErrorAction SilentlyContinue)
                     if ($files.Count -eq 0) { continue }
-                    $resolved = Add-LnchJsonlProjectEvidence 'omp' $files $projects $bucket.Name 'session-jsonl'
+                    $resolved = Add-LnchJsonlProjectEvidence 'omp' $files $projects $bucket.Name 'session-jsonl' @jsonlOptions
                     if ($resolved -eq 0) {
                         $latest = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
                         Add-LnchAgentProject $projects $null $bucket.Name 'encoded-session-bucket' $files.Count $latest.LastWriteTimeUtc 'unresolved'
@@ -286,7 +301,7 @@ function script:Get-LnchAgentProjectEvidence {
             }
         }
         'claude' {
-            foreach ($store in @($AgentState.Datastores | Where-Object { $_.Kind -eq 'global-state' -and $_.Readable })) {
+            foreach ($store in @($AgentState.Datastores | Where-Object { -not $SessionActivityOnly -and $_.Kind -eq 'global-state' -and $_.Readable })) {
                 try {
                     $state = Get-Content -LiteralPath $store.Path -Raw | ConvertFrom-Json
                     foreach ($property in @($state.projects.PSObject.Properties)) {
@@ -299,7 +314,7 @@ function script:Get-LnchAgentProjectEvidence {
                 if (-not (Test-Path -LiteralPath $container -PathType Container)) { continue }
                 foreach ($projectDir in @(Get-ChildItem -LiteralPath $container -Directory -ErrorAction SilentlyContinue)) {
                     $files = @(Get-ChildItem -LiteralPath $projectDir.FullName -File -Filter '*.jsonl' -ErrorAction SilentlyContinue)
-                    $resolved = Add-LnchJsonlProjectEvidence 'claude' $files $projects $projectDir.Name 'session-jsonl'
+                    $resolved = Add-LnchJsonlProjectEvidence 'claude' $files $projects $projectDir.Name 'session-jsonl' @jsonlOptions
                     if ($files.Count -gt 0 -and $resolved -eq 0) {
                         $latest = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
                         Add-LnchAgentProject $projects $null $projectDir.Name 'encoded-project-directory' $files.Count $latest.LastWriteTimeUtc 'unresolved'
@@ -313,7 +328,7 @@ function script:Get-LnchAgentProjectEvidence {
                     $container = Join-Path $store.Path $directoryName
                     if (-not (Test-Path -LiteralPath $container -PathType Container)) { continue }
                     $files = @(Get-ChildItem -LiteralPath $container -File -Recurse -Filter '*.jsonl' -ErrorAction SilentlyContinue)
-                    $null = Add-LnchJsonlProjectEvidence 'codex' $files $projects $null 'rollout-jsonl'
+                    $null = Add-LnchJsonlProjectEvidence 'codex' $files $projects $null 'rollout-jsonl' @jsonlOptions
                 }
             }
         }
@@ -342,7 +357,17 @@ function script:Get-LnchAgentProjectEvidence {
                         if (Test-Path -LiteralPath $marker -PathType Leaf) {
                             try {
                                 $owner = (Get-Content -LiteralPath $marker -Raw).Trim()
-                                Add-LnchAgentProject $projects $owner $slugDir.Name 'project-root-marker' 0 $slugDir.LastWriteTimeUtc 'verified'
+                                if ($SessionActivityOnly) {
+                                    $chats = Join-Path $slugDir.FullName 'chats'
+                                    $latest = if (Test-Path -LiteralPath $chats -PathType Container) {
+                                        Get-ChildItem -LiteralPath $chats -File -ErrorAction SilentlyContinue |
+                                            Where-Object { $_.Extension -in @('.json', '.jsonl') -and $_.LastWriteTimeUtc -gt $Since } |
+                                            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+                                    } else { $null }
+                                    if ($latest) { Add-LnchAgentProject $projects $owner $slugDir.Name 'chat-recording' 1 $latest.LastWriteTimeUtc 'verified' }
+                                } else {
+                                    Add-LnchAgentProject $projects $owner $slugDir.Name 'project-root-marker' 0 $slugDir.LastWriteTimeUtc 'verified'
+                                }
                                 $slugs[$slugDir.Name] = $true
                             } catch { }
                         } elseif ($baseName -eq 'tmp' -and -not $slugs.ContainsKey($slugDir.Name) -and (Test-Path -LiteralPath (Join-Path $slugDir.FullName 'chats'))) {
@@ -355,7 +380,17 @@ function script:Get-LnchAgentProjectEvidence {
             }
         }
         'aider' {
-            Add-LnchProjectMarkers 'aider' $KnownDirectories $projects
+            if ($SessionActivityOnly) {
+                foreach ($directory in $KnownDirectories) {
+                    $history = Join-Path $directory '.aider.chat.history.md'
+                    if (Test-Path -LiteralPath $history -PathType Leaf) {
+                        $file = Get-Item -LiteralPath $history
+                        if ($file.LastWriteTimeUtc -gt $Since) { Add-LnchAgentProject $projects $directory $directory 'markdown-history' 1 $file.LastWriteTimeUtc 'verified' }
+                    }
+                }
+            } else {
+                Add-LnchProjectMarkers 'aider' $KnownDirectories $projects
+            }
             $notes += 'Aider has no global project registry; historical discovery is bounded to configured/common roots and projects known by another agent.'
             $completeness = 'partial'
         }
@@ -366,6 +401,7 @@ function script:Get-LnchAgentProjectEvidence {
                     foreach ($file in @(Get-ChildItem -LiteralPath $legacy -File -Recurse -Filter '*.json' -ErrorAction SilentlyContinue)) {
                         try {
                             $session = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+                            if ($SessionActivityOnly -and $session.parentID) { continue }
                             $directory = if ($session.directory) { $session.directory } elseif ($session.path -and $session.path.root) { $session.path.root } else { $null }
                             if ($directory) { Add-LnchAgentProject $projects $directory $session.id 'legacy-session-json' 1 $file.LastWriteTimeUtc 'verified' }
                         } catch { }
@@ -380,6 +416,7 @@ function script:Get-LnchAgentProjectEvidence {
                     $end = $raw.LastIndexOf(']')
                     if ($start -ge 0 -and $end -ge $start) {
                         foreach ($session in @(($raw.Substring($start, $end - $start + 1)) | ConvertFrom-Json)) {
+                            if ($SessionActivityOnly -and $session.parentID) { continue }
                             Add-LnchAgentProject $projects $session.directory $session.projectId 'native-session-list' 1 $session.updated 'verified'
                         }
                     }
@@ -399,7 +436,7 @@ function script:Get-LnchAgentProjectEvidence {
                     $chats = Join-Path $projectDir.FullName 'chats'
                     if (-not (Test-Path -LiteralPath $chats -PathType Container)) { continue }
                     $files = @(Get-ChildItem -LiteralPath $chats -File -Filter '*.jsonl' -ErrorAction SilentlyContinue)
-                    $resolved = Add-LnchJsonlProjectEvidence 'qwen' $files $projects $projectDir.Name 'session-jsonl'
+                    $resolved = Add-LnchJsonlProjectEvidence 'qwen' $files $projects $projectDir.Name 'session-jsonl' @jsonlOptions
                     if ($files.Count -gt 0 -and $resolved -eq 0) {
                         $latest = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
                         Add-LnchAgentProject $projects $null $projectDir.Name 'encoded-project-directory' $files.Count $latest.LastWriteTimeUtc 'unresolved'
@@ -409,7 +446,7 @@ function script:Get-LnchAgentProjectEvidence {
         }
     }
 
-    if ($agent -ne 'aider') { Add-LnchProjectMarkers $agent $KnownDirectories $projects }
+    if (-not $SessionActivityOnly -and $agent -ne 'aider') { Add-LnchProjectMarkers $agent $KnownDirectories $projects }
     $projectList = @(ConvertFrom-LnchAgentProjectMap $projects)
     if ($projectList.Count -gt 0 -and $completeness -eq 'not-found') { $completeness = 'partial' }
     [pscustomobject][ordered]@{
@@ -417,6 +454,43 @@ function script:Get-LnchAgentProjectEvidence {
         Projects     = $projectList
         Notes        = @($notes)
     }
+}
+
+function script:Get-LnchNativeAgentActivity {
+    param(
+        [string[]]$Directories = @(),
+        [string]$ProjectPath,
+        [datetime]$Since = [datetime]::MinValue,
+        [string]$PreferredAgent
+    )
+    $activityByProject = @{}
+    $targetKey = if ($ProjectPath) { Get-LnchProjectKey $ProjectPath } else { $null }
+    $candidates = @(@($PreferredAgent) + $script:BuiltInAgentNames | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($candidate in $candidates) {
+        if ($script:BuiltInAgentNames -notcontains $candidate) { continue }
+        $executable = if ($candidate -eq 'opencode') {
+            @(Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+        } else { $null }
+        $state = [pscustomobject]@{
+            Agent = $candidate
+            Status = 'available'
+            Datastores = @(Get-LnchAgentDatastoreCandidates -Agent $candidate)
+            Executable = if ($executable) { $executable.Source } else { $null }
+        }
+        $evidence = Get-LnchAgentProjectEvidence -AgentState $state -KnownDirectories $Directories -SessionActivityOnly -Since $Since -ProjectPath $ProjectPath
+        foreach ($project in @($evidence.Projects | Where-Object { $_.Path -and $_.SessionCount -gt 0 })) {
+            $key = Get-LnchProjectKey $project.Path
+            if ($targetKey -and $key -ne $targetKey) { continue }
+            $activity = ConvertTo-LnchActivityTime $project.LastActivity
+            if (-not $activity -or $activity -le $Since) { continue }
+            $previous = $activityByProject[$key]
+            if (-not $previous -or $activity -gt $previous.LastUsed) {
+                $activityByProject[$key] = [pscustomobject]@{ Agent = $candidate; LastUsed = $activity }
+                if ($targetKey) { $Since = $activity }
+            }
+        }
+    }
+    $activityByProject
 }
 
 function script:Merge-LnchDiscoveredProjects {

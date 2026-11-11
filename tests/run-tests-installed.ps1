@@ -29,7 +29,7 @@ $runner = Join-Path $testRoot 'invoke-lnch.ps1'
 $envNames = @(
     'PATH', 'LNCH_ACCEPTANCE_LOG', 'LNCH_ACCEPTANCE_WT_LOG', 'LNCH_CONFIG_DIR', 'LNCH_RUNTIME_DIR', 'LNCH_NO_UPDATE_CHECK',
     'LNCH_PROJECTS_DIR', 'LNCH_NAME', 'LNCH_PROMPT', 'LNCH_YOLO', 'LNCH_AGENT',
-    'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS', 'LNCH_ACCEPTANCE_EXIT_CODE'
+    'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS', 'LNCH_ACCEPTANCE_EXIT_CODE', 'WT_SESSION', 'LNCH_DISCOVERY_HOME'
 )
 $before = @{}
 foreach ($name in $envNames) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -165,7 +165,6 @@ public static class WtStub
 param([string]$InstallDir, [string]$CleanHome, [string]$ExplicitRoot, [string]$SessionsFile)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $InstallDir 'Lnch.ps1')
-Set-Item Function:\Get-LnchLatestReleaseTag -Value { 'v-installed-acceptance' }
 Set-Location -LiteralPath $CleanHome
 lnch existing -TerminalMode tab
 $env:LNCH_PROJECTS_DIR = $ExplicitRoot
@@ -195,8 +194,10 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     [Environment]::SetEnvironmentVariable('LNCH_ACCEPTANCE_WT_LOG', $wtLog, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_CONFIG_DIR', $configDir, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_RUNTIME_DIR', $runtimeDir, 'Process')
-    [Environment]::SetEnvironmentVariable('LNCH_NO_UPDATE_CHECK', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('LNCH_NO_UPDATE_CHECK', '1', 'Process')
+    [Environment]::SetEnvironmentVariable('LNCH_DISCOVERY_HOME', $cleanHome, 'Process')
     [Environment]::SetEnvironmentVariable('LNCH_PROJECTS_DIR', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('WT_SESSION', $null, 'Process')
     foreach ($name in @('LNCH_NAME', 'LNCH_PROMPT', 'LNCH_YOLO', 'LNCH_AGENT', 'LNCH_FRESH', 'LNCH_ROOT', 'LNCH_VERBS')) {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
@@ -239,8 +240,6 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
         throw 'fresh project did not receive its configured repository-local Git identity'
     }
 
-    if (-not (Test-Path -LiteralPath (Join-Path $configDir 'update-cache.json') -PathType Leaf)) { throw 'first-run update cache was not written' }
-
     $wtCalls = @(Get-Content -LiteralPath $wtLog | ForEach-Object {
         $decoded = @($_ -split ',' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
         Write-Output (, $decoded)
@@ -279,7 +278,6 @@ lnch -Tabs -Json | Set-Content -LiteralPath $SessionsFile -Encoding utf8
     if ($LASTEXITCODE -ne 23) { throw "managed child hid the agent's failure status: $LASTEXITCODE`n$($failureOutput -join [Environment]::NewLine)" }
     Write-Host 'PASS installed inline and managed child exit status'
 
-    Write-Host 'PASS installed clean-config cache write'
     Write-Host 'PASS installed real child processes'
     Write-Host 'PASS installed dynamic and explicit roots'
     Write-Host 'PASS installed paths with spaces and Unicode'

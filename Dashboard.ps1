@@ -9,6 +9,28 @@ function script:Get-LnchDashboardPathKey {
     try { return [System.IO.Path]::GetFullPath($Path).TrimEnd('\').ToLowerInvariant() } catch { return $Path.Trim().TrimEnd('\').ToLowerInvariant() }
 }
 
+function script:Resolve-LnchDashboardRoots {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][string[]]$ProjectRoots = @()
+    )
+    $seen = @{}
+    $roots = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($value in @($Root) + @($ProjectRoots)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        try {
+            $full = [System.IO.Path]::GetFullPath([string]$value)
+            $key = Get-LnchDashboardPathKey $full
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $roots.Add($full)
+            }
+        } catch { }
+    }
+    if ($roots.Count -eq 0) { throw 'At least one valid project root is required.' }
+    @($roots.ToArray())
+}
+
 function script:Test-LnchInteractiveTerminal {
     try {
         return ($Host.Name -eq 'ConsoleHost') -and (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected)
@@ -93,19 +115,41 @@ function script:Get-LnchDashboardProjectState {
 
 function global:Get-LnchProjectDashboardSnapshot {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Root, [switch]$RefreshDisk)
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][string[]]$ProjectRoots = @(),
+        [switch]$RefreshDisk
+    )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    $rootsFull = @(Resolve-LnchDashboardRoots -Root $Root -ProjectRoots $ProjectRoots)
+    $rootFull = $rootsFull[0]
     $sessions = @(Get-LnchTerminalSessions | Sort-Object UpdatedAt -Descending)
     $processTable = Get-LnchDashboardProcessTable
     $now = [datetime]::UtcNow
     $processorCount = [Math]::Max(1, [Environment]::ProcessorCount)
     $projects = New-Object System.Collections.Generic.List[object]
-    $directories = if (Test-Path -LiteralPath $rootFull -PathType Container) {
-        @(Get-ChildItem -LiteralPath $rootFull -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
-    } else { @() }
+    $directoryEntries = New-Object System.Collections.Generic.List[object]
+    $seenDirectories = @{}
+    foreach ($projectRoot in $rootsFull) {
+        if (-not (Test-Path -LiteralPath $projectRoot -PathType Container)) { continue }
+        foreach ($directory in @(Get-ChildItem -LiteralPath $projectRoot -Directory -ErrorAction SilentlyContinue)) {
+            $directoryKey = Get-LnchDashboardPathKey $directory.FullName
+            if (-not $seenDirectories.ContainsKey($directoryKey)) {
+                $seenDirectories[$directoryKey] = $true
+                $directoryEntries.Add([pscustomobject]@{ Root = $projectRoot; Directory = $directory })
+            }
+        }
+    }
+    $historyScope = (Get-LnchDiscoveryHome) + '|' + (@($directoryEntries | ForEach-Object { $_.Directory.FullName }) -join '|')
+    if ($RefreshDisk -or -not $script:LnchDashboardAgentHistory -or
+        $script:LnchDashboardAgentHistory.Scope -ne $historyScope -or
+        ($now - $script:LnchDashboardAgentHistory.MeasuredAt).TotalSeconds -ge 15) {
+        $history = Get-LnchNativeAgentActivity -Directories @($directoryEntries | ForEach-Object { $_.Directory.FullName })
+        $script:LnchDashboardAgentHistory = [pscustomobject]@{ Scope = $historyScope; MeasuredAt = $now; Activity = $history }
+    }
 
-    foreach ($directory in $directories) {
+    foreach ($entry in @($directoryEntries.ToArray() | Sort-Object @{ Expression = { $_.Directory.Name } }, @{ Expression = { $_.Directory.FullName } })) {
+        $directory = $entry.Directory
         $directoryKey = Get-LnchDashboardPathKey $directory.FullName
         $projectSessions = @($sessions | Where-Object { (Get-LnchDashboardPathKey $_.Directory) -eq $directoryKey })
         $activeSessions = @($projectSessions | Where-Object Active)
@@ -118,9 +162,8 @@ function global:Get-LnchProjectDashboardSnapshot {
         }
 
         $agents = @($activeSessions | ForEach-Object { [string]$_.Agent } | Where-Object { $_ } | Sort-Object -Unique)
-        if ($agents.Count -eq 0 -and $latest -and $latest.Agent) { $agents = @([string]$latest.Agent) }
-        if ($agents.Count -eq 0 -and $meta -and $meta.agent) { $agents = @([string]$meta.agent) }
-        $agent = if ($agents.Count -gt 0) { $agents -join '+' } else { 'auto' }
+        if ($agents.Count -eq 0) { $agents = @(Get-ProjectAgent -Dir $directory.FullName -NativeActivity $script:LnchDashboardAgentHistory.Activity) }
+        $agent = $agents -join '+'
 
         $rootIds = @($activeSessions | ForEach-Object { if ($_.Pid) { [int]$_.Pid } })
         $processIds = if ($rootIds.Count -gt 0) { @(Get-LnchDashboardProcessTreeIds -RootIds $rootIds -ProcessTable $processTable) } else { @() }
@@ -170,6 +213,7 @@ function global:Get-LnchProjectDashboardSnapshot {
         $projects.Add([pscustomobject][ordered]@{
             Name              = $directory.Name
             Directory         = $directory.FullName
+            Root              = $entry.Root
             Agent             = $agent
             State             = $state
             StateSource       = if ($latest) { 'terminal-receipt' } else { 'filesystem' }
@@ -200,6 +244,7 @@ function global:Get-LnchProjectDashboardSnapshot {
         Schema      = 1
         GeneratedAt = $now.ToString('o')
         Root        = $rootFull
+        Roots       = @($rootsFull)
         Summary     = [pscustomobject][ordered]@{
             ProjectCount   = $projectArray.Count
             ActiveProjects = @($projectArray | Where-Object { $_.ActiveSessions -gt 0 }).Count
@@ -249,6 +294,7 @@ function script:Start-LnchDashboardSnapshotRequest {
     param(
         [Parameter(Mandatory)]$Worker,
         [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][string[]]$ProjectRoots = @(),
         [switch]$RefreshDisk
     )
     if ($Worker.PowerShell) { return $false }
@@ -257,6 +303,7 @@ function script:Start-LnchDashboardSnapshotRequest {
     try {
         $request.Runspace = $Worker.Runspace
         $null = $request.AddCommand('Get-LnchProjectDashboardSnapshot').AddParameter('Root', $Root)
+        if ($ProjectRoots.Count -gt 0) { $null = $request.AddParameter('ProjectRoots', $ProjectRoots) }
         if ($RefreshDisk) { $null = $request.AddParameter('RefreshDisk', $true) }
         $Worker.PowerShell = $request
         $Worker.AsyncResult = $request.BeginInvoke()
@@ -423,7 +470,7 @@ function script:Get-LnchDashboardSortRank {
 
 function script:Get-LnchDashboardOrderedProjects {
     param([Parameter(Mandatory)]$Snapshot)
-    @($Snapshot.Projects | Sort-Object @{ Expression = { Get-LnchDashboardSortRank $_.State } }, Name)
+    @($Snapshot.Projects | Sort-Object @{ Expression = { Get-LnchDashboardSortRank $_.State } }, Name, Directory)
 }
 
 function script:Get-LnchDashboardAvailableAgents {
@@ -498,10 +545,11 @@ function script:Get-LnchDashboardCreateFocusCount {
 function script:Resolve-LnchDashboardProjectName {
     param(
         [Parameter(Mandatory)][string]$Root,
-        [AllowEmptyString()][string]$Name
+        [AllowEmptyString()][string]$Name,
+        [switch]$Existing
     )
     $rootFull = [System.IO.Path]::GetFullPath($Root)
-    $value = if ($null -eq $Name) { '' } else { $Name.Trim() }
+    $value = if ($null -eq $Name) { '' } elseif ($Existing) { $Name } else { $Name.Trim() }
     $errorMessage = $null
     $directory = $null
 
@@ -517,6 +565,10 @@ function script:Resolve-LnchDashboardProjectName {
             $prefix = $rootFull.TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
             if (-not $directory.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                 $errorMessage = 'The project name escapes the projects root.'
+            } elseif ($Existing) {
+                if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+                    $errorMessage = "Project '$value' no longer exists."
+                }
             } elseif (Test-Path -LiteralPath $directory) {
                 $errorMessage = "Project '$value' already exists."
             }
@@ -534,18 +586,20 @@ function script:Resolve-LnchDashboardProjectName {
 }
 
 function global:Invoke-LnchDashboardProjectLaunch {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Create')]
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Agent,
-        [Parameter(Mandatory)][string]$GitName,
-        [Parameter(Mandatory)][string]$GitEmail
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$Agent,
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$GitName,
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$GitEmail,
+        [Parameter(Mandatory, ParameterSetName = 'Existing')][switch]$Existing
     )
-    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name
+    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name -Existing:$Existing
     if (-not $resolved.Valid) { throw $resolved.Error }
 
-    $terminal = Get-LnchTerminalConfig -Agent $Agent
+    if ($Existing) { $Agent = Get-ProjectAgent -Dir $resolved.Directory }
+    $terminal = Get-LnchTerminalConfig -Mode $(if ($Existing) { 'tab' } else { $null }) -Agent $Agent
     if ($terminal.Mode -eq 'inline' -or $terminal.Backend -eq 'inline') {
         throw 'Starting a project from the dashboard requires a managed terminal backend.'
     }
@@ -591,37 +645,48 @@ function global:Invoke-LnchDashboardProjectLaunch {
 }
 
 function script:Start-LnchDashboardProjectProcess {
+    [CmdletBinding(DefaultParameterSetName = 'Create')]
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Agent,
-        [Parameter(Mandatory)][string]$GitName,
-        [Parameter(Mandatory)][string]$GitEmail
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$Agent,
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$GitName,
+        [Parameter(Mandatory, ParameterSetName = 'Create')][string]$GitEmail,
+        [Parameter(Mandatory, ParameterSetName = 'Existing')][switch]$Existing
     )
-    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name
+    $resolved = Resolve-LnchDashboardProjectName -Root $Root -Name $Name -Existing:$Existing
     if (-not $resolved.Valid) { throw $resolved.Error }
 
     $shell = @(Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
-    $identity = Resolve-LnchGitIdentityValues -Name $GitName -Email $GitEmail -Source custom
-    if (-not $identity.Valid) { throw $identity.Error }
+    $identity = $null
+    $launchCommand = 'Invoke-LnchDashboardProjectLaunch -Root {0} -Name {1}' -f @(
+        (ConvertTo-LnchPowerShellLiteral ([System.IO.Path]::GetFullPath($Root))),
+        (ConvertTo-LnchPowerShellLiteral $resolved.Name)
+    )
+    if ($Existing) {
+        $launchCommand += ' -Existing'
+    } else {
+        $identity = Resolve-LnchGitIdentityValues -Name $GitName -Email $GitEmail -Source custom
+        if (-not $identity.Valid) { throw $identity.Error }
+        $launchCommand += ' -Agent {0} -GitName {1} -GitEmail {2}' -f @(
+            (ConvertTo-LnchPowerShellLiteral $Agent),
+            (ConvertTo-LnchPowerShellLiteral $identity.Name),
+            (ConvertTo-LnchPowerShellLiteral $identity.Email)
+        )
+    }
 
     $shellExecutable = if ($shell) { $shell.Source } else { Join-Path $PSHOME 'powershell.exe' }
     $lnchScript = Join-Path $script:LnchRoot 'Lnch.ps1'
     $command = @(
         '$ErrorActionPreference = ''Stop'''
         ('. {0}' -f (ConvertTo-LnchPowerShellLiteral $lnchScript))
-        ('Invoke-LnchDashboardProjectLaunch -Root {0} -Name {1} -Agent {2} -GitName {3} -GitEmail {4} | Out-Null' -f @(
-            (ConvertTo-LnchPowerShellLiteral ([System.IO.Path]::GetFullPath($Root))),
-            (ConvertTo-LnchPowerShellLiteral $resolved.Name),
-            (ConvertTo-LnchPowerShellLiteral $Agent),
-            (ConvertTo-LnchPowerShellLiteral $identity.Name),
-            (ConvertTo-LnchPowerShellLiteral $identity.Email)
-        ))
+        ($launchCommand + ' | Out-Null')
     ) -join [Environment]::NewLine
     $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
     $process = Start-Process -FilePath $shellExecutable -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand" -WorkingDirectory $script:LnchRoot -WindowStyle Hidden -PassThru
     [pscustomobject]@{
         Name      = $resolved.Name
+        Existing  = [bool]$Existing
         Agent     = $Agent
         GitName   = $identity.Name
         GitEmail  = $identity.Email
@@ -666,7 +731,8 @@ function script:Get-LnchDashboardFrame {
     $summary = $Snapshot.Summary
     $cpuText = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.0}%', [double]$summary.CpuPercent)
     $summaryText = " ACTIVE $($summary.ActiveProjects)/$($summary.ProjectCount)   SESSIONS $($summary.ActiveSessions)   PROCS $($summary.ProcessCount)   CPU $cpuText   RAM $(Format-LnchDashboardBytes $summary.WorkingSetBytes)   DISK $(Format-LnchDashboardBytes $summary.DiskBytes)   COST -- "
-    $rootText = " ROOT  $($Snapshot.Root)"
+    $rootCount = @($Snapshot.Roots).Count
+    $rootText = if ($rootCount -gt 1) { " ROOTS $($Snapshot.Root) (+$($rootCount - 1))" } else { " ROOT  $($Snapshot.Root)" }
     $title = ' LNCH TOP '
     $top = $topLeft + $horizontal + $title + ($horizontal * [Math]::Max(0, $width - $title.Length - 3)) + $topRight
     $bottom = $bottomLeft + ($horizontal * ($width - 2)) + $bottomRight
@@ -804,7 +870,7 @@ function script:Get-LnchDashboardFrame {
     } elseif ($Notice) {
         $footer = " $Notice   N new project   Q quit   updated $generated "
     } else {
-        $footer = " UP/DOWN select   N new project   R measure disk   Q quit   updated $generated "
+        $footer = " UP/DOWN select   ENTER open tab   N new   R disk   Q quit   updated $generated "
     }
     $lines.Add("$cyan$bold$(Limit-LnchDashboardText $footer $width)$reset") | Out-Null
     $lines -join [Environment]::NewLine
@@ -814,20 +880,22 @@ function global:Show-LnchDashboard {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Root,
+        [AllowEmptyCollection()][string[]]$ProjectRoots = @(),
         [switch]$Json,
         [switch]$Once,
         [ValidateRange(250, 10000)][int]$RefreshMilliseconds = 1200
     )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    $rootsFull = @(Resolve-LnchDashboardRoots -Root $Root -ProjectRoots $ProjectRoots)
+    $rootFull = $rootsFull[0]
     if ($Json) {
-        Get-LnchProjectDashboardSnapshot -Root $rootFull | ConvertTo-Json -Depth 8
+        Get-LnchProjectDashboardSnapshot -Root $rootFull -ProjectRoots $rootsFull | ConvertTo-Json -Depth 8
         return
     }
 
     $interactive = Test-LnchInteractiveTerminal
     if ($Once -or -not $interactive) {
-        $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull
+        $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -ProjectRoots $rootsFull
         Get-LnchDashboardFrame -Snapshot $snapshot -Width 120 -Height 30 -SelectedIndex 0
         return
     }
@@ -853,6 +921,7 @@ function global:Show-LnchDashboard {
         Schema      = 1
         GeneratedAt = [datetime]::UtcNow.ToString('o')
         Root        = $rootFull
+        Roots       = @($rootsFull)
         Summary     = [pscustomobject][ordered]@{
             ProjectCount = 0; ActiveProjects = 0; ActiveSessions = 0; ProcessCount = 0
             CpuPercent = 0; WorkingSetBytes = 0; DiskBytes = $null; Cost = $null; CostKind = 'unknown'
@@ -862,11 +931,11 @@ function global:Show-LnchDashboard {
 
     try {
         $worker = New-LnchDashboardSnapshotWorker
-        $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull
+        $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull -ProjectRoots $rootsFull
         $nextRefresh = [datetime]::MaxValue
     } catch {
         $worker = $null
-        $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull
+        $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -ProjectRoots $rootsFull
         $loading = $false
         $notice = 'Background telemetry unavailable; using synchronous refresh.'
         $noticeUntil = [datetime]::UtcNow.AddSeconds(5)
@@ -891,7 +960,11 @@ function global:Show-LnchDashboard {
                     if ($projectLaunch.Process.HasExited) {
                         $exitCode = [int]$projectLaunch.Process.ExitCode
                         if ($exitCode -eq 0) {
-                            $notice = "Started $($projectLaunch.Name) with $($projectLaunch.Agent) as $($projectLaunch.GitName)."
+                            $notice = if ($projectLaunch.Existing) {
+                                "Opened $($projectLaunch.Name) in a new tab."
+                            } else {
+                                "Started $($projectLaunch.Name) with $($projectLaunch.Agent) as $($projectLaunch.GitName)."
+                            }
                         } else {
                             $notice = "Failed to start $($projectLaunch.Name) (exit $exitCode)."
                         }
@@ -947,18 +1020,18 @@ function global:Show-LnchDashboard {
                 $refreshResult = Receive-LnchDashboardSnapshotRequest -Worker $worker
                 if ($refreshResult) {
                     if ($refreshResult.Snapshot) {
-                        $selectedName = $null
+                        $selectedDirectory = $null
                         $previousProjects = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot)
                         if ($previousProjects.Count -gt 0 -and $selectedIndex -lt $previousProjects.Count) {
-                            $selectedName = [string]$previousProjects[$selectedIndex].Name
+                            $selectedDirectory = [string]$previousProjects[$selectedIndex].Directory
                         }
                         $snapshot = $refreshResult.Snapshot
                         $loading = $false
                         $updatedProjects = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot)
                         $selectedIndex = 0
-                        if ($selectedName) {
+                        if ($selectedDirectory) {
                             for ($index = 0; $index -lt $updatedProjects.Count; $index++) {
-                                if ($updatedProjects[$index].Name -eq $selectedName) {
+                                if ([string]::Equals([string]$updatedProjects[$index].Directory, $selectedDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
                                     $selectedIndex = $index
                                     break
                                 }
@@ -979,7 +1052,7 @@ function global:Show-LnchDashboard {
 
                 if (-not $worker.PowerShell -and ($refreshDiskQueued -or $now -ge $nextRefresh)) {
                     $refreshDiskActive = $refreshDiskQueued
-                    $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull -RefreshDisk:$refreshDiskActive
+                    $null = Start-LnchDashboardSnapshotRequest -Worker $worker -Root $rootFull -ProjectRoots $rootsFull -RefreshDisk:$refreshDiskActive
                     $refreshDiskQueued = $false
                     $nextRefresh = [datetime]::MaxValue
                     if ($refreshDiskActive) {
@@ -989,7 +1062,7 @@ function global:Show-LnchDashboard {
                     }
                 }
             } elseif ($now -ge $nextRefresh) {
-                $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -RefreshDisk:$refreshDiskQueued
+                $snapshot = Get-LnchProjectDashboardSnapshot -Root $rootFull -ProjectRoots $rootsFull -RefreshDisk:$refreshDiskQueued
                 $loading = $false
                 $refreshDiskQueued = $false
                 $nextRefresh = $now.AddMilliseconds($RefreshMilliseconds)
@@ -1115,6 +1188,26 @@ function global:Show-LnchDashboard {
                         $projectCount = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot).Count
                         $selectedIndex++
                         if ($selectedIndex -ge $projectCount) { $selectedIndex = 0 }
+                        $renderPending = $true
+                    }
+                    'Enter' {
+                        if ($projectLaunch) {
+                            $notice = 'Wait for the current project launch to finish.'
+                            $noticeUntil = [datetime]::UtcNow.AddSeconds(3)
+                        } elseif (-not $createPending) {
+                            $projects = @(Get-LnchDashboardOrderedProjects -Snapshot $snapshot)
+                            if ($projects.Count -gt 0 -and $selectedIndex -lt $projects.Count) {
+                                $selectedProject = $projects[$selectedIndex]
+                                try {
+                                    $projectLaunch = Start-LnchDashboardProjectProcess -Root $selectedProject.Root -Name $selectedProject.Name -Existing
+                                    $notice = "Opening $($selectedProject.Name) in a new tab..."
+                                    $noticeUntil = [datetime]::MaxValue
+                                } catch {
+                                    $notice = "Failed to open $($selectedProject.Name): $($_.Exception.Message)"
+                                    $noticeUntil = [datetime]::UtcNow.AddSeconds(5)
+                                }
+                            }
+                        }
                         $renderPending = $true
                     }
                     'N' {

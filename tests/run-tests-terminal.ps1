@@ -16,6 +16,7 @@ $oldConfig = $env:LNCH_CONFIG_DIR
 $oldRuntime = $env:LNCH_RUNTIME_DIR
 $oldWtLog = $env:LNCH_WT_LOG
 $oldProfile = $env:WT_PROFILE_ID
+$oldSession = $env:WT_SESSION
 $script:fail = 0
 
 function Check([string]$Label, [bool]$Condition) {
@@ -29,6 +30,11 @@ try {
 if defined LNCH_WT_LOG >>"%LNCH_WT_LOG%" echo WT %*
 exit /b 0
 '@ | Set-Content -LiteralPath (Join-Path $bin 'wt.cmd') -Encoding ascii
+    @'
+@echo off
+if defined LNCH_WT_LOG >>"%LNCH_WT_LOG%" echo WTX %*
+exit /b 0
+'@ | Set-Content -LiteralPath (Join-Path $bin 'wtx.cmd') -Encoding ascii
     @{ defaultAgent = 'omp'; terminal = @{ readinessTimeoutMs = 0; window = 'last'; titleTemplate = $titleTemplate; agentColors = @{ omp = '#123456' } } } |
         ConvertTo-Json -Depth 8 |
         Set-Content -LiteralPath (Join-Path $configDir 'config.json') -Encoding utf8
@@ -37,7 +43,18 @@ exit /b 0
     $env:LNCH_RUNTIME_DIR = $runtimeDir
     $env:LNCH_WT_LOG = $wtLog
     $env:WT_PROFILE_ID = '{11111111-1111-1111-1111-111111111111}'
+    Remove-Item Env:WT_SESSION -ErrorAction SilentlyContinue
     . (Join-Path $LnchRoot 'Lnch.ps1')
+
+    $pathTerminal = script:Resolve-LnchWindowsTerminalCommand
+    Check 'PATH terminal fallback' ($pathTerminal.Origin -eq 'path' -and $pathTerminal.Source -eq (Join-Path $bin 'wt.cmd'))
+    $currentTerminalProcesses = @(
+        [pscustomobject]@{ ProcessId = 300; ParentProcessId = 200; Name = 'pwsh.exe'; ExecutablePath = 'C:\PowerShell\pwsh.exe' }
+        [pscustomobject]@{ ProcessId = 200; ParentProcessId = 100; Name = 'WindowsTerminal.exe'; ExecutablePath = (Join-Path $bin 'wtx.cmd') }
+        [pscustomobject]@{ ProcessId = 100; ParentProcessId = 0; Name = 'explorer.exe'; ExecutablePath = 'C:\Windows\explorer.exe' }
+    )
+    $currentTerminal = script:Resolve-LnchWindowsTerminalCommand -ProcessTable $currentTerminalProcesses -ProcessId 300
+    Check 'current terminal preferred' ($currentTerminal.Origin -eq 'current-terminal' -and $currentTerminal.Source -eq (Join-Path $bin 'wtx.cmd') -and $currentTerminal.ProcessId -eq 200)
 
     $defaults = Get-LnchTerminalConfig -Agent omp
     Check 'default tab mode' ($defaults.Mode -eq 'tab')
@@ -53,6 +70,13 @@ exit /b 0
     Check 'AgentTerm policy accepted' ($agentTermPolicy.Backend -eq 'agentterm' -and $agentTermPolicy.AgentTermPort -eq 8123 -and $agentTermPolicy.AgentTermHome -eq $testRoot)
     $autoPolicy = Get-LnchTerminalConfig -Backend auto -Agent omp
     Check 'explicit auto policy accepted' ($autoPolicy.Backend -eq 'auto')
+
+    $hostContext = New-LnchLaunchContext -Name host-route -Directory $projectA -Root $testRoot -Agent omp -Prompt @() -Verbs @() -Fresh $false -Terminal $defaults
+    $hostResult = @(Invoke-LnchWindowsTerminal -Contexts @($hostContext) -TerminalCommand $currentTerminal)[0]
+    $hostLog = Get-Content -LiteralPath $wtLog -Raw
+    Check 'current terminal receives launch' ($hostResult.Accepted -and $hostLog -match '^WTX --window last new-tab')
+    Remove-Item -LiteralPath (Get-LnchLaunchContextPath $hostContext.LaunchId) -Force
+    Remove-Item -LiteralPath $wtLog -Force
 
     $contextA = New-LnchLaunchContext -Name alpha -Directory $projectA -Root $testRoot -Agent omp -Prompt @('hello', 'world') -Verbs @([pscustomobject]@{ Name = 'model'; Value = 'gpt-5.6-sol' }) -Fresh $false -Terminal $defaults
     $contextB = New-LnchLaunchContext -Name beta -Directory $projectB -Root $testRoot -Agent omp -Prompt @() -Verbs @() -Fresh $true -Terminal $defaults
@@ -177,5 +201,6 @@ exit /b 0
     $env:LNCH_RUNTIME_DIR = $oldRuntime
     $env:LNCH_WT_LOG = $oldWtLog
     $env:WT_PROFILE_ID = $oldProfile
+    $env:WT_SESSION = $oldSession
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

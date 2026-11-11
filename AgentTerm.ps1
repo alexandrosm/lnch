@@ -174,15 +174,20 @@ function global:Invoke-LnchTerminal {
     param([Parameter(Mandatory)][object[]]$Contexts)
     if ($Contexts.Count -eq 0) { return @() }
     $backend = [string]$Contexts[0].Terminal.Backend
+    $terminalCommand = $null
     if ($backend -eq 'auto') {
         $resolvedHome = [System.IO.Path]::GetFullPath([string]$Contexts[0].Terminal.AgentTermHome)
-        if (Get-LnchAgentTermConnection -AgentTermHome $resolvedHome) { $backend = 'agentterm' }
-        elseif (Get-Command wt -CommandType Application -ErrorAction SilentlyContinue) { $backend = 'wt' }
-        elseif (Resolve-LnchAgentTermExecutable -Context $Contexts[0]) { $backend = 'agentterm' }
-        else { $backend = 'inline' }
+        if (Get-LnchAgentTermConnection -AgentTermHome $resolvedHome) {
+            $backend = 'agentterm'
+        } else {
+            $terminalCommand = Resolve-LnchWindowsTerminalCommand
+            if ($terminalCommand) { $backend = 'wt' }
+            elseif (Resolve-LnchAgentTermExecutable -Context $Contexts[0]) { $backend = 'agentterm' }
+            else { $backend = 'inline' }
+        }
     }
     switch ($backend) {
-        'wt' { Invoke-LnchWindowsTerminal -Contexts $Contexts }
+        'wt' { Invoke-LnchWindowsTerminal -Contexts $Contexts -TerminalCommand $terminalCommand }
         'agentterm' { Invoke-LnchAgentTerm -Contexts $Contexts }
         default { @($Contexts | ForEach-Object { [pscustomobject]@{ Context = $_; Accepted = $false; Ready = $false; Receipt = $null; Error = 'no managed terminal backend available' } }) }
     }

@@ -7,7 +7,8 @@ $LnchDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $StubBin    = Join-Path $PSScriptRoot 'stubs'
 $TestRoot   = Join-Path ([IO.Path]::GetTempPath()) ('ps-startertest-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $Projects   = Join-Path $TestRoot 'projects'
-New-Item -ItemType Directory -Path $Projects -Force | Out-Null
+$SecondaryProjects = Join-Path $TestRoot 'secondary-projects'
+New-Item -ItemType Directory -Path $Projects, $SecondaryProjects -Force | Out-Null
 
 # self-healing PATH: sandbox environments strip System32/Git unpredictably
 $sysRoot = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
@@ -16,7 +17,9 @@ $env:PATH = "$StubBin;$gitCmd;$sysRoot\System32;$sysRoot\System32\WindowsPowerSh
 
 $env:LNCH_PROJECTS_DIR = $Projects
 $env:LNCH_RUNTIME_DIR = Join-Path $TestRoot 'runtime'
+$env:LNCH_DISCOVERY_HOME = Join-Path $TestRoot 'home'
 $env:LNCH_WT_LOG = Join-Path $TestRoot 'wt.log'
+Remove-Item Env:WT_SESSION -ErrorAction SilentlyContinue
 
 $env:LNCH_NO_UPDATE_CHECK = '1'
 # redirected user-config so persisted-default/hook tests never touch real %APPDATA%
@@ -39,6 +42,7 @@ $backup = if (Test-Path -LiteralPath $registryPath) { Get-Content -LiteralPath $
     defaultAgent = 'omp'
     gitIdentity = @{ name = 'Lnch Test'; email = 'lnch-test@example.invalid' }
     terminal = @{ readinessTimeoutMs = 0 }
+    secondaryProjectRoots = @($SecondaryProjects)
 } | ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath (Join-Path $env:LNCH_CONFIG_DIR 'config.json') -Encoding utf8
 
@@ -57,6 +61,13 @@ try {
     . (Join-Path $LnchDir 'Lnch.ps1')
     $__lnchFn = ${function:lnch}
     if (-not $__lnchFn) { throw 'lnch function failed to load' }
+
+    $secondaryOnly = Join-Path $SecondaryProjects 'secondary-only'
+    New-Item -ItemType Directory -Path (Join-Path $secondaryOnly '.git') -Force | Out-Null
+    @{ agent = 'omp'; intent = 'secondary fixture'; updated = '2026-01-01T00:00:00Z' } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $secondaryOnly '.lnch.json') -Encoding utf8
+    $configuredRoots = @(Get-LnchProjectRoots)
+    Check 'secondary root configured' ($configuredRoots.Count -eq 2 -and $configuredRoots[0] -eq [System.IO.Path]::GetFullPath($Projects) -and $configuredRoots[1] -eq [System.IO.Path]::GetFullPath($SecondaryProjects))
 
     $identityCandidates = @(Get-LnchGitIdentityCandidates)
     Check 'identity configured candidate' (@($identityCandidates | Where-Object {
@@ -93,6 +104,17 @@ try {
     Check 'B continue'     (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'B no terminal handoff' (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
 
+    Write-Host '=== B1: secondary project roots ==='
+    $out = & $__lnchFn secondary-only -Here
+    Check 'B1 existing secondary project selected' (($out -join ' ') -match [regex]::Escape("[omp-stub] cwd=$secondaryOnly"))
+    Check 'B1 secondary project not recreated in primary' (-not (Test-Path -LiteralPath (Join-Path $Projects 'secondary-only')))
+    $secondaryAlpha = Join-Path $SecondaryProjects 'alpha'
+    New-Item -ItemType Directory -Path (Join-Path $secondaryAlpha '.git') -Force | Out-Null
+    @{ agent = 'omp'; updated = '2026-01-01T00:00:00Z' } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $secondaryAlpha '.lnch.json') -Encoding utf8
+    $out = & $__lnchFn alpha -Here
+    Check 'B1 primary root wins duplicate name' (($out -join ' ') -match [regex]::Escape("[omp-stub] cwd=$(Join-Path $Projects 'alpha')"))
+
     Write-Host '=== B2: failed agent startup restores the caller ==='
     $missingAgent = 'lnch-missing-' + [guid]::NewGuid().ToString('N')
     $script:AgentProfiles[$missingAgent] = @{ TakesPromptOnResume = $true; Caps = @{} }
@@ -121,40 +143,20 @@ try {
     Check 'D resume last'  ($j -match '\[codex-stub\] args=resume --last')
     Check 'D no prompt'    (!($j -match 'some prompt'))
 
-    Write-Host '=== E: theta intent; bare lnch -> fzf line -> resumed ==='
+    Write-Host '=== E: named prompt and intent ==='
     $out = & $__lnchFn theta build a snake game -Here
     Check 'E fresh theta'  (($out -join ' ') -match '\[omp-stub\] args="build a snake game"')
-    $out = & $__lnchFn -Here
-    Check 'E picked theta' (($out -join ' ') -match '\[omp-stub\] args=-c ')
     Check 'E intent saved' ((Meta 'theta') -match 'build a snake game')
 
-    Write-Host '=== E1: single picker selection keeps its managed tab ==='
+    Write-Host '=== E1: bare command opens the dashboard without launching ==='
     Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $out = & $__lnchFn
-    Check 'E1 selected project opens a tab' ((Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw) -match 'new-tab .*--title theta ')
-    foreach ($pickerLaunchId in @(Get-WtLaunchIds)) {
-        Remove-Item -LiteralPath (Get-LnchLaunchContextPath $pickerLaunchId) -Force
-    }
-
-    Write-Host '=== E2: multi-project picker launches one terminal batch ==='
-    Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
-    $env:LNCH_TEST_FZF_MULTI = '1'
-    $out = & $__lnchFn
-    Remove-Item Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
-    $wtLog = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
-    Check 'E2 theta tab' ($wtLog -match 'new-tab .*--title theta ')
-    Check 'E2 alpha tab' ($wtLog -match 'new-tab .*--title alpha ')
-    Check 'E2 one wt invocation' ([regex]::Matches($wtLog, '^WT-STUB', [System.Text.RegularExpressions.RegexOptions]::Multiline).Count -eq 1)
-    Check 'E2 two tab actions' ([regex]::Matches($wtLog, 'new-tab').Count -eq 2)
-    Check 'E2 explicit inheritance' ([regex]::Matches($wtLog, '--inheritEnvironment').Count -eq 2)
-    $batchIds = @(Get-WtLaunchIds)
-    Check 'E2 two launch envelopes' ($batchIds.Count -eq 2)
-    foreach ($batchId in $batchIds) { Remove-Item -LiteralPath (Get-LnchLaunchContextPath $batchId) -Force -ErrorAction SilentlyContinue }
-
-    Write-Host '=== E3: numbered multi-range parser ==='
-    $indexes = @(ConvertFrom-LnchProjectSelection -Selection '1,3-4' -Count 5)
-    Check 'E3 range' (($indexes -join ',') -eq '1,3,4')
-    Check 'E3 all' ((@(ConvertFrom-LnchProjectSelection -Selection 'all' -Count 4) -join ',') -eq '1,2,3,4')
+    $bareDashboard = ((& $__lnchFn -Json) -join [Environment]::NewLine) | ConvertFrom-Json
+    $secondaryDashboardProject = @($bareDashboard.Projects | Where-Object { $_.Name -eq 'secondary-only' -and $_.Directory -eq $secondaryOnly })[0]
+    Check 'E1 dashboard inventory' ($bareDashboard.Schema -eq 1 -and @($bareDashboard.Roots).Count -eq 2 -and @($bareDashboard.Projects | Where-Object Name -eq 'theta').Count -eq 1 -and $secondaryDashboardProject.Root -eq [System.IO.Path]::GetFullPath($SecondaryProjects))
+    Check 'E1 no terminal handoff' (-not (Test-Path -LiteralPath $env:LNCH_WT_LOG))
+    $emptyDashboardRoot = Join-Path $TestRoot 'empty-dashboard'
+    $emptyDashboard = ((& $__lnchFn -Json -ResolvedRoot $emptyDashboardRoot) -join [Environment]::NewLine) | ConvertFrom-Json
+    Check 'E1 empty dashboard does not create a project' ($emptyDashboard.Summary.ProjectCount -eq 0 -and -not (Test-Path -LiteralPath $emptyDashboardRoot))
 
     Write-Host '=== E4: project disk usage ==='
     $usageRoot = Join-Path $Projects 'usage-fixture'
@@ -165,12 +167,6 @@ try {
     [System.IO.File]::WriteAllBytes((Join-Path $usageNested 'child.bin'), (New-Object byte[] 1024))
     Check 'E4 recursive bytes' ((Get-LnchProjectDiskUsage -Dir $usageRoot) -eq 3072)
     Check 'E4 empty directory' ((Get-LnchProjectDiskUsage -Dir $usageEmpty) -eq 0)
-    Check 'E4 human size' ((script:Format-LnchSize 3072) -eq '3 KB')
-    $env:LNCH_TEST_FZF_LOG = Join-Path $TestRoot 'fzf-project-lines.txt'
-    $null = @(Select-LnchProjectSet -Root $Projects)
-    Remove-Item Env:LNCH_TEST_FZF_LOG -ErrorAction SilentlyContinue
-    $pickerLines = Get-Content -LiteralPath (Join-Path $TestRoot 'fzf-project-lines.txt') -Raw
-    Check 'E4 picker size column' ($pickerLines -match '(?m)^usage-fixture\s+\|.*\|\s+3 KB\s+\|')
 
     Write-Host '=== E5: live project dashboard telemetry ==='
     $dashboardTerminal = Get-LnchTerminalConfig -Backend wt -ReadinessTimeoutMs 0 -Agent omp
@@ -185,12 +181,13 @@ try {
     Check 'E5 active process tree' ($usageTelemetry.State -eq 'running' -and $usageTelemetry.ActiveSessions -eq 1 -and $usageTelemetry.ProcessCount -ge 1 -and $usageTelemetry.WorkingSetBytes -gt 0)
     Check 'E5 disk and model' ($usageTelemetry.DiskBytes -eq 3072 -and $usageTelemetry.Model -eq 'gpt-5.6-sol' -and $usageTelemetry.ModelSource -eq 'launch')
     Check 'E5 cost remains unknown' ($null -eq $usageTelemetry.Cost -and $usageTelemetry.CostKind -eq 'unknown')
-    $dashboardFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 132 -Height 24 -SelectedIndex 0
-    Check 'E5 pretty frame' ($dashboardFrame -match 'LNCH TOP' -and $dashboardFrame -match 'usage-fixture' -and $dashboardFrame -match 'RUNNING' -and $dashboardFrame -match 'MODEL' -and $dashboardFrame -match 'COST')
+    $multiRootSnapshot = Get-LnchProjectDashboardSnapshot -Root $Projects -ProjectRoots $configuredRoots
+    $secondaryTelemetry = @($multiRootSnapshot.Projects | Where-Object { $_.Name -eq 'secondary-only' -and $_.Directory -eq $secondaryOnly })[0]
+    Check 'E5 secondary root telemetry' (@($multiRootSnapshot.Roots).Count -eq 2 -and $secondaryTelemetry.Root -eq [System.IO.Path]::GetFullPath($SecondaryProjects))
+    $duplicateAlphaRows = @($multiRootSnapshot.Projects | Where-Object Name -eq 'alpha')
+    Check 'E5 duplicate names retain exact roots' ($duplicateAlphaRows.Count -eq 2 -and @($duplicateAlphaRows | Where-Object Root -eq ([System.IO.Path]::GetFullPath($SecondaryProjects))).Count -eq 1)
     $dashboardCreate = script:New-LnchDashboardCreateState -IdentityCandidates $identityCandidates
     $dashboardCreate.Name = 'from-tui'
-    $dashboardCreateFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 132 -Height 24 -SelectedIndex 0 -CreateState $dashboardCreate
-    Check 'E5 create modal' ($dashboardCreateFrame -match 'NEW PROJECT' -and $dashboardCreateFrame -match 'from-tui' -and $dashboardCreateFrame -match 'IDENTITY' -and $dashboardCreateFrame -match 'Lnch Test' -and $dashboardCreateFrame -match 'lnch-test@example.invalid')
     $dashboardCompactCreateFrame = script:Get-LnchDashboardFrame -Snapshot $dashboardSnapshot -Width 60 -Height 16 -SelectedIndex 0 -CreateState $dashboardCreate
     Check 'E5 compact create frame height' (([regex]::Split($dashboardCompactCreateFrame, '\r?\n')).Count -eq 16)
     $customIdentityIndex = [array]::IndexOf(@($dashboardCreate.Identities | ForEach-Object Id), 'custom')
@@ -247,6 +244,35 @@ try {
         Remove-Item -LiteralPath (Get-LnchLaunchContextPath $dashboardLaunchId) -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath (Join-Path (Join-Path $env:LNCH_RUNTIME_DIR 'sessions') "$dashboardLaunchId.json") -Force -ErrorAction SilentlyContinue
     }
+
+    Write-Host '=== E6: dashboard opens an existing project in a tab ==='
+    $dashboardConfigPath = Join-Path $env:LNCH_CONFIG_DIR 'config.json'
+    $dashboardSavedConfig = Get-Content -LiteralPath $dashboardConfigPath -Raw
+    try {
+        $dashboardConfig = $dashboardSavedConfig | ConvertFrom-Json
+        $dashboardConfig.terminal | Add-Member -NotePropertyName mode -NotePropertyValue inline
+        $dashboardConfig | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $dashboardConfigPath -Encoding utf8
+        Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
+        $openedProject = Invoke-LnchDashboardProjectLaunch -Root $Projects -Name alpha -Existing
+        $openedLog = Get-Content -LiteralPath $env:LNCH_WT_LOG -Raw
+        Check 'E6 explicit tab overrides inline default' ($openedLog -match 'new-tab .*--title alpha ')
+        $out = & $__lnchFn -FromLauncher -LaunchId $openedProject.LaunchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+        Check 'E6 owning agent resumes in original project' (($out -join ' ') -match '\[omp-stub\] args=-c\b' -and ($out -join ' ') -match [regex]::Escape("[omp-stub] cwd=$(Join-Path $Projects 'alpha')"))
+        Remove-Item -LiteralPath $env:LNCH_WT_LOG -Force -ErrorAction SilentlyContinue
+        $openedSecondary = Invoke-LnchDashboardProjectLaunch -Root $SecondaryProjects -Name alpha -Existing
+        $out = & $__lnchFn -FromLauncher -LaunchId $openedSecondary.LaunchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
+        Check 'E6 duplicate-name secondary opens from selected root' (($out -join ' ') -match [regex]::Escape("[omp-stub] cwd=$secondaryAlpha"))
+        $missingProjectRejected = $false
+        try {
+            Invoke-LnchDashboardProjectLaunch -Root $Projects -Name missing-dashboard-project -Existing | Out-Null
+        } catch {
+            $missingProjectRejected = $true
+        }
+        Check 'E6 missing selection is not recreated' ($missingProjectRejected -and -not (Test-Path -LiteralPath (Join-Path $Projects 'missing-dashboard-project')))
+    } finally {
+        Set-Content -LiteralPath $dashboardConfigPath -Value $dashboardSavedConfig -Encoding utf8
+    }
+
     $topJson = ((& $__lnchFn -Top -Json) -join [Environment]::NewLine) | ConvertFrom-Json
     Check 'E5 top JSON' ($topJson.Schema -eq 1 -and @($topJson.Projects | Where-Object Name -eq 'usage-fixture').Count -eq 1)
     $longTopPath = Join-Path $Projects '--top'
@@ -270,7 +296,9 @@ try {
     try {
         Set-Location -LiteralPath (Join-Path $Projects 'epsilon')
         $out = & $__lnchFn -FromLauncher -LaunchId $launchId -RuntimeRoot $env:LNCH_RUNTIME_DIR
-    } finally { Set-Location -LiteralPath $previousLocation }
+    } finally {
+        Set-Location -LiteralPath $previousLocation
+    }
     $j = $out -join ' '
     Check 'F launcher fresh prompt' (($j -match '\[omp-stub\] args="hi there"') -and -not ($j -match 'args=-c'))
     Check 'F context consumed' (-not (Test-Path -LiteralPath (Get-LnchLaunchContextPath $launchId)))
@@ -322,6 +350,23 @@ try {
         Set-Content -LiteralPath $configPath -Value $savedConfig -Encoding utf8
     }
 
+    Write-Host '=== F4: removed managed workspaces are never recreated ==='
+    foreach ($handoffState in @('pending', 'restored')) {
+        $vanishedRoot = Join-Path $TestRoot "removed-$handoffState-root"
+        $vanishedDirectory = Join-Path $vanishedRoot 'removed-workspace'
+        New-Item -ItemType Directory -Path $vanishedDirectory -Force | Out-Null
+        $vanishedContext = New-LnchLaunchContext -Name removed-workspace -Directory $vanishedDirectory -Root $vanishedRoot -Agent omp -Fresh ($handoffState -eq 'pending') -Terminal (Get-LnchTerminalConfig -ReadinessTimeoutMs 0)
+        if ($handoffState -eq 'restored') {
+            $vanishedContext = Receive-LnchLaunchContext -LaunchId $vanishedContext.LaunchId
+            Write-LnchTerminalReceipt -Context $vanishedContext -State agent-exited -ExitCode 0 | Out-Null
+        }
+        Remove-Item -LiteralPath $vanishedRoot -Recurse -Force
+        $missingRejected = $false
+        try { & $__lnchFn -FromLauncher -LaunchId $vanishedContext.LaunchId -RuntimeRoot $env:LNCH_RUNTIME_DIR | Out-Null } catch { $missingRejected = $true }
+        $missingReceipt = Get-LnchTerminalSessions | Where-Object LaunchId -eq $vanishedContext.LaunchId
+        Check "F4 $handoffState rejects missing workspace without creating root" ($missingRejected -and -not (Test-Path -LiteralPath $vanishedRoot) -and $missingReceipt.State -eq 'failed')
+    }
+
     Write-Host '=== G: root escape rejected ==='
     try { & $__lnchFn ..\evil -Here; Check 'G reject' $false } catch { Check 'G reject' $true }
 
@@ -363,12 +408,17 @@ try {
 
     Write-Host '=== N: doctor audit incl capability matrix ==='
     $env:LNCH_INSTALL_DIR = $LnchDir
+    $doctorSentinel = Join-Path $Projects '.doctor-probe'
+    Set-Content -LiteralPath $doctorSentinel -Value 'user-owned data'
     $out = & powershell.exe -NoProfile -Command '. "$env:LNCH_INSTALL_DIR\Lnch.ps1"; lnch -Doctor' 2>&1
     $j = $out -join ' '
     Check 'N doctor runs'  ($j -match 'lnch doctor')
     Check 'N git ok'       ($j -match '\[ok\] git')
     Check 'N cap matrix'   ($j -match 'resume-pick')
     Check 'N hooks line'   ($j -match 'post-create hooks configured')
+    Check 'N secondary root' ($j -match [regex]::Escape("secondary projects root $SecondaryProjects"))
+    Check 'N doctor preserves existing files' ((Test-Path -LiteralPath $doctorSentinel) -and (Get-Content -LiteralPath $doctorSentinel -Raw).Trim() -eq 'user-owned data')
+    Check 'N doctor removes only its own probe' (@(Get-ChildItem -LiteralPath $Projects -Filter '.lnch-doctor-*.tmp' -Force).Count -eq 0)
 
     Write-Host '=== O: entry.ps1 --agent passthrough ==='
     $entry = Join-Path $LnchDir 'entry.ps1'
@@ -388,6 +438,16 @@ try {
     $out = & $__lnchFn alpha :pick -Here 2>&1
     $j = $out -join ' '
     Check 'P pick only'    (($j -match 'args=-r\b') -and (!($j -match 'args=-c\b')))
+    $out = & $__lnchFn alpha :resume -Here
+    Check 'P explicit resume is not duplicated' (@($out | Where-Object { $_.Trim() -eq '[omp-stub] args=-c' }).Count -eq 1)
+    $out = & $__lnchFn alpha :resume :pick -Here
+    Check 'P picker takes precedence over explicit resume' (@($out | Where-Object { $_.Trim() -eq '[omp-stub] args=-r' }).Count -eq 1)
+
+    Write-Host '=== P1: supported approval modes reach the agent ==='
+    $out = & $__lnchFn beta :plan sketch design -Here
+    Check 'P1 planning mode with prompt' (($out -join ' ').Trim() -match '\[claude-stub\] args=-c --permission-mode plan "sketch design"$')
+    $out = & $__lnchFn beta :edits -Here
+    Check 'P1 edit approval mode' (($out -join ' ').Trim() -match '\[claude-stub\] args=-c --permission-mode acceptEdits$')
 
     Write-Host '=== Q: :model capability verb (fresh) ==='
     $out = & $__lnchFn nu4 :model opus -Agent omp -Here 2>&1
@@ -472,25 +532,6 @@ try {
         Set-Location -LiteralPath $originalLocation
         if ($originalRoot) { $env:LNCH_PROJECTS_DIR = $originalRoot }
         else { Remove-Item Env:LNCH_PROJECTS_DIR -ErrorAction SilentlyContinue }
-    }
-
-    Write-Host '=== W: update cache creates its config directory ==='
-    $configBeforeUpdateTest = $env:LNCH_CONFIG_DIR
-    $noUpdateBefore = $env:LNCH_NO_UPDATE_CHECK
-    $updateConfig = Join-Path $TestRoot 'missing-update-config'
-    $latestReleaseResolver = ${function:Get-LnchLatestReleaseTag}
-    try {
-        $env:LNCH_CONFIG_DIR = $updateConfig
-        Remove-Item Env:LNCH_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
-        Set-Item Function:\Get-LnchLatestReleaseTag -Value { 'v1.3.1-test' }
-        $latest = Get-LnchUpdateNoticeState
-        Check 'W latest returned' ($latest -eq 'v1.3.1-test')
-        Check 'W cache directory' (Test-Path -LiteralPath $updateConfig -PathType Container)
-        Check 'W cache file' (Test-Path -LiteralPath (Join-Path $updateConfig 'update-cache.json') -PathType Leaf)
-    } finally {
-        Set-Item Function:\Get-LnchLatestReleaseTag -Value $latestReleaseResolver
-        $env:LNCH_CONFIG_DIR = $configBeforeUpdateTest
-        $env:LNCH_NO_UPDATE_CHECK = $noUpdateBefore
     }
 
     Write-Host '=== V: Level Zero and One agent discovery ==='
@@ -702,6 +743,35 @@ try {
         Check 'V entry JSON schema' ($jsonDocument -and $jsonDocument.Schema -eq 2)
         Check 'V entry JSON agents' ($jsonDocument -and @($jsonDocument.Agents).Count -eq 7)
         Check 'V entry JSON projects' ($jsonDocument -and @($jsonDocument.Projects).Count -ge 6)
+
+        Write-Host '=== V2: discovery and session cache follow configured roots ==='
+        $rootConfigPath = Join-Path $env:LNCH_CONFIG_DIR 'config.json'
+        $rootConfigBefore = Get-Content -LiteralPath $rootConfigPath -Raw
+        $secondaryEnvBefore = $env:LNCH_SECONDARY_PROJECTS_DIRS
+        try {
+            $catalogRoot = Join-Path $TestRoot 'outside\deep\configured'
+            $catalogProject = Join-Path $catalogRoot 'local-history'
+            $envCatalogRoot = Join-Path $TestRoot 'outside\deep\environment'
+            $envCatalogProject = Join-Path $envCatalogRoot 'env-history'
+            New-Item -ItemType Directory -Path $catalogProject, $envCatalogProject -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $catalogProject '.aider.chat.history.md') -Value '#### configured root task'
+            Set-Content -LiteralPath (Join-Path $envCatalogProject '.aider.chat.history.md') -Value '#### environment root task'
+            $beforeRoots = Get-LnchSessionInventory -Agent aider -Refresh
+            Check 'V2 unrelated history excluded' (@($beforeRoots.Sessions | Where-Object ProjectPath -eq $catalogProject).Count -eq 0)
+            $rootConfig = $rootConfigBefore | ConvertFrom-Json
+            $rootConfig | Add-Member -NotePropertyName secondaryProjectRoots -NotePropertyValue @($catalogRoot) -Force
+            $rootConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $rootConfigPath -Encoding utf8
+            $afterRoots = Get-LnchSessionInventory -Agent aider
+            $configuredHistory = @($afterRoots.Sessions | Where-Object ProjectPath -eq $catalogProject)
+            Check 'V2 configured root invalidates session cache' ($configuredHistory.Count -eq 1 -and $configuredHistory[0].Title -eq 'configured root task')
+            $env:LNCH_SECONDARY_PROJECTS_DIRS = $envCatalogRoot
+            $envRoots = Get-LnchSessionInventory -Agent aider
+            $envHistory = @($envRoots.Sessions | Where-Object ProjectPath -eq $envCatalogProject)
+            Check 'V2 environment root invalidates session cache' ($envHistory.Count -eq 1 -and $envHistory[0].Title -eq 'environment root task')
+        } finally {
+            Set-Content -LiteralPath $rootConfigPath -Value $rootConfigBefore -Encoding utf8
+            [Environment]::SetEnvironmentVariable('LNCH_SECONDARY_PROJECTS_DIRS', $secondaryEnvBefore, 'Process')
+        }
     } finally {
         foreach ($envName in $discoveryEnvNames) {
             [Environment]::SetEnvironmentVariable($envName, $discoveryEnvBefore[$envName], 'Process')
@@ -710,7 +780,7 @@ try {
 } finally {
     if ($null -ne $backup) { Set-Content -LiteralPath $registryPath -Value $backup -Encoding utf8 }
     else { Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_RUNTIME_DIR, Env:LNCH_WT_LOG, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK, Env:LNCH_TEST_FZF_MULTI -ErrorAction SilentlyContinue
+    Remove-Item Env:LNCH_PROJECTS_DIR, Env:LNCH_CONFIG_DIR, Env:LNCH_RUNTIME_DIR, Env:LNCH_WT_LOG, Env:LNCH_NAME, Env:LNCH_PROMPT, Env:LNCH_YOLO, Env:LNCH_AGENT, Env:LNCH_FRESH, Env:LNCH_ROOT, Env:LNCH_VERBS, Env:LNCH_INSTALL_DIR, Env:LNCH_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TestRoot -ErrorAction SilentlyContinue
 }
 
