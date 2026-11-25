@@ -81,7 +81,9 @@ if ($isGitCheckout) {
             $innerPrefix = "lnch-$Version"
         }
 
-        Expand-Archive -LiteralPath $tmpZip -DestinationPath $tmpExt
+        # A new staging path needs no overwrite overload; this works on .NET Framework and Core.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($tmpZip, $tmpExt)
         $unpacked = Join-Path $tmpExt $innerPrefix
         if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'Lnch.ps1') -PathType Leaf)) { $unpacked = $tmpExt }
         foreach ($required in @('Lnch.ps1', 'entry.ps1', 'install.ps1', 'install-cmd.ps1', 'install.sh')) {
@@ -126,8 +128,7 @@ if ($bashExe -and (Test-Path $bashExe)) {
 }
 
 if (Test-Path -LiteralPath $legacyDest) {
-    Remove-Item -LiteralPath $legacyDest -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host 'removed legacy ~/.project-starter install'
+    Write-Host "left $legacyDest in place; check it for projects before removing it"
 }
 
 Write-Host ''

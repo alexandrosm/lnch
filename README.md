@@ -38,9 +38,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 All three download the repo to `~\.lnch` and wire up that shell's face (the PowerShell bootstrap also wires bash when it detects it). Re-running any of them updates an existing install. The PowerShell launch path also runs the bootstrap before every agent launch, without a cached-version gate. Uninstall per shell: `uninstall.ps1`, `uninstall.sh`, `install-cmd.ps1 -Remove` from the installed folder.
 
-The PowerShell bootstrap validates the downloaded payload before copying it into place. Updates replace shipped files without deleting the installation directory, preserving custom `agents.json` and any projects stored beneath it. Checksum or malformed-archive failures leave the existing installation untouched; failed Git pulls stop before profile installation. Downloads use an invocation-specific temporary directory that is cleaned on success or failure.
+Both bootstraps unpack downloads in a temporary directory and check for the required entry points before updating an existing install. Tagged releases must match the archive's exact `SHA256SUMS` entry. Only shipped files are replaced: projects under `~/.lnch/projects` and a custom `agents.json` stay in place. A failed checksum, extraction, or entry-point check leaves the installed files and shell hooks untouched. Git checkouts still update with `git pull --ff-only`; the Bash bootstrap's fallback to `main` keeps existing archive installs in archive form.
 
-Existing project-starter installs migrate automatically: profile/rc markers are replaced, `%APPDATA%\project-starter` moves to `%APPDATA%\lnch`, and `.ps-project.json` files become `.lnch.json` on first access. The old `start` override is not retained.
+Existing project-starter shell hooks and settings migrate automatically: profile/rc markers are replaced, `%APPDATA%\project-starter` moves to `%APPDATA%\lnch`, and `.ps-project.json` files become `.lnch.json` on first access. The old `start` override is not retained. Neither bootstrap deletes `~/.project-starter`; move any projects you still use before removing that directory yourself.
 
 ## Shells
 
@@ -328,7 +328,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-smoke-agentterm-li
 
 The installed journey uses isolated configuration, launches existing and fresh projects through real child PowerShell processes, restores a consumed Windows Terminal command as a prompt-free resume, and checks dynamic/explicit roots, spaces and Unicode, terminal policy arguments, envelope consumption, readiness/exit receipts, the public ledger, and native resume. CI runs it against both the checked-out payload and the remotely bootstrapped install. On an interactive Windows desktop, `tests\run-smoke-terminal-live.ps1` exercises the current WT-compatible host executable, while `tests\run-smoke-agentterm-live.ps1` exercises a real AgentTerm control plane and takeover-safe shell persistence.
 
-The offline PowerShell bootstrap suite uses local release archives and isolated installer fixtures to verify project/config preservation, checksum and malformed-archive rejection, failed Git updates, temporary-file cleanup, and execution of the installed engine.
+The offline PowerShell bootstrap suite uses local release archives and isolated installer fixtures to verify data preservation, bad archive rejection, failed Git updates, cleanup, and execution of the installed engine. From Git Bash, run `bash tests/run-tests-bootstrap.sh` to exercise a tagged reinstall over existing projects, rejected updates that leave the engine and profile untouched, and the archive and Git paths for `main`.
 
 The update suite uses a real local Git remote and installed child processes: same-version commits must reach the agent before inline and managed launches, and an actual failed pull must still permit launch. Agent-selection regressions cover stale metadata, native activity, child-session exclusion, duplicate folder names, scaffold files, explicit overrides, failed starts, handoffs, and dashboard consistency.
 

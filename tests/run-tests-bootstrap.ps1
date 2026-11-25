@@ -49,11 +49,15 @@ try {
 
     $destination = Join-Path $temp 'existing install'
     $project = Join-Path $destination 'projects\keep-me'
+    $legacyWork = Join-Path $HOME '.project-starter\projects\keep-me\work.txt'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $legacyWork) -Force | Out-Null
+    Set-Content -LiteralPath $legacyWork -Value 'unmigrated project data'
     New-Item -ItemType Directory -Path $project -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $project 'work.txt') -Value 'irreplaceable project data'
     Set-Content -LiteralPath (Join-Path $destination 'agents.json') -Value '{"custom":{"caps":{}}}'
     Set-Content -LiteralPath (Join-Path $destination 'Lnch.ps1') -Value '# old engine'
-    & (Join-Path $repo 'bootstrap.ps1') -Version v99.0.0 -Destination $destination -ContinueLaunch
+    & (Join-Path $repo 'bootstrap.ps1') -Version v99.0.0 -Destination $destination
+    Check 'manual install preserves legacy projects' ((Test-Path -LiteralPath $legacyWork) -and (Get-Content -LiteralPath $legacyWork -Raw).Trim() -eq 'unmigrated project data')
     $keptProject = Join-Path $project 'work.txt'
     $keptRegistry = Join-Path $destination 'agents.json'
     Check 'archive update preserves project data' ((Test-Path -LiteralPath $keptProject) -and (Get-Content -LiteralPath $keptProject -Raw).Trim() -eq 'irreplaceable project data')
